@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Timetable Calendar</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+
+<div class="bar-top">
+  <span class="t" id="ttl">Timetable</span>
+  <button class="hbtn" id="bigBtn" title="Open the calendar in a large window">⤢ Big view</button>
+  <button class="hbtn" id="cfgBtn">⚙ Source</button>
+</div>
+
+<div class="pad">
+  <div class="banner bad" id="errBanner" style="display:none"></div>
+  <div class="banner" id="warnBanner" style="display:none"></div>
+  <div class="banner info" id="setupBanner" style="display:none">
+    Pick which table drives the calendar — press <b>⚙ Source</b>.
+  </div>
+
+  <div class="skey" id="skey" style="display:none"></div>
+
+  <div class="card editor">
+    <div class="row toolbar" style="margin-bottom:9px">
+      <button class="btn primary" id="addBtn">+ Add task</button>
+      <button class="btn" id="undoBtn" title="Undo the last calendar change" disabled>↩ Undo</button>
+      <button class="btn" id="sortBtn" title="Reorder the rows in the sheet by date">Sort by date</button>
+      <button class="btn" id="reloadBtn">↻ Refresh</button>
+    </div>
+    <h2>Tasks &amp; milestones</h2>
+    <div id="mbody"></div>
+    <p class="note">Edits here write straight into the sheet, and edits you type
+      in the sheet appear here. Leave <b>End</b> blank for a single-day milestone.
+      <b>async</b> = run across weekends. <b>⤢</b> jumps to the row in Excel.</p>
+  </div>
+
+  <div class="card editor">
+    <h2>Filter by status</h2>
+    <div class="chips" id="statusFilters"></div>
+  </div>
+
+  <div class="row toolbar" style="margin-bottom:10px">
+    <label class="mini">Size
+      <select id="density">
+        <option value="compact">Compact</option>
+        <option value="comfortable" selected>Comfortable</option>
+        <option value="large">Large</option>
+        <option value="xlarge">Extra large</option>
+      </select>
+    </label>
+    <label class="mini"><input type="checkbox" id="showDates"> dates on bars</label>
+  </div>
+  <div id="calendar"></div>
+</div>
+
+<!-- ---------------- source & mapping ---------------- -->
+<div class="modal" id="cfgModal">
+  <div class="sheetbox">
+    <h3>Data source</h3>
+    <p class="note">Choose the table that drives the calendar, then map each
+      calendar field to one of its columns. Only <b>Task</b> and <b>Start</b> are
+      required — anything left as <i>none</i> is hidden and never written to.
+      This is saved inside the workbook, so anyone who opens the file gets it.</p>
+
+    <div class="frow"><label>Sheet</label><select id="cfgSheet"></select></div>
+    <div class="frow"><label>Table / range</label><select id="cfgTable"></select></div>
+    <div class="frow">
+      <label>…or header cell</label>
+      <input type="text" id="cfgAnchor" placeholder="e.g. B7">
+      <button class="btn sm" id="anchorBtn">Use this cell</button>
+    </div>
+
+    <h4>Column mapping</h4>
+    <div class="maps" id="cfgMaps"></div>
+
+    <div class="acts">
+      <button class="btn" id="cfgCancel">Cancel</button>
+      <button class="btn primary" id="cfgSave">Save &amp; connect</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="calendar.js"></script>
+<script src="excel.js"></script>
+<script src="taskpane.js"></script>
+</body>
+</html>

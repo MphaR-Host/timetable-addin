@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Timetable — big view</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<script src="html2canvas.min.js"></script>
+<style>
+  /* The dialog is a full window, so it gets the wide layout by default. */
+  body{background:var(--bg);}
+  .wrapbig{padding:14px;}
+  .pngwrap{position:relative;}
+  .pngmenu{position:absolute;right:0;top:34px;background:#fff;border:1px solid var(--line);
+    border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.22);padding:5px;display:none;
+    z-index:80;min-width:210px;max-height:64vh;overflow:auto;}
+  .pngmenu.open{display:block;}
+  .pngmenu button{display:block;width:100%;text-align:left;border:none;background:none;
+    padding:7px 10px;font-size:13px;color:var(--ink);cursor:pointer;border-radius:5px;font-family:inherit;}
+  .pngmenu button:hover{background:#f0f3f7;}
+  .pngmenu .hd{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);
+    padding:6px 10px 2px;font-weight:700;}
+  /* html2canvas 1.4.1 does not render inset box-shadows, which is how the
+     Pending "hollow" and the Done/milestone edges are drawn. During capture we
+     swap those insets for real borders so the statuses survive the snapshot. */
+  .pngfix .bar.st-Pending,.pngfix .msi.st-Pending{box-shadow:none!important;border:2px solid currentColor!important;}
+  .pngfix .bar.st-Done{box-shadow:none!important;border:1px solid #9aa6b2!important;}
+  .pngfix .msi.st-Done{box-shadow:none!important;border-left:3px solid #9aa6b2!important;}
+  .pngfix .msi.st-Ongoing{box-shadow:none!important;border-left:3px solid rgba(0,0,0,.35)!important;}
+</style>
+</head>
+<body>
+
+<div class="bar-top">
+  <span class="t" id="ttl">Timetable</span>
+  <button class="hbtn" id="undoBtn" title="Undo the last change">↩ Undo</button>
+  <label class="mini" style="color:#fff">Size
+    <select id="density">
+      <option value="compact">Compact</option>
+      <option value="comfortable">Comfortable</option>
+      <option value="large" selected>Large</option>
+      <option value="xlarge">Extra large</option>
+    </select>
+  </label>
+  <label class="mini" style="color:#fff">Months per row
+    <select id="perRow">
+      <option value="auto" selected>Auto</option>
+      <option value="1">1</option><option value="2">2</option>
+      <option value="3">3</option><option value="4">4</option>
+    </select>
+  </label>
+  <label class="mini" style="color:#fff"><input type="checkbox" id="showDates"> dates on bars</label>
+  <div class="pngwrap">
+    <button class="hbtn" id="pngBtn">🖼 Save PNG ▾</button>
+    <div class="pngmenu" id="pngMenu"></div>
+  </div>
+  <button class="hbtn" id="printBtn">🖨 Print / PDF</button>
+</div>
+
+<div class="wrapbig">
+  <div class="banner info" id="hint">
+    Click any bar or milestone to select its row in Excel · click a day to add a task ·
+    drag across days for a multi-day task.
+  </div>
+  <div class="skey" id="skey"></div>
+  <div id="calendar"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="calendar.js"></script>
+<script>
+/* The dialog cannot reach the Excel object model, so it asks the task pane to
+   act on its behalf and receives the data back the same way. */
+(function () {
+  "use strict";
+  var items = [], hidden = [], available = [], ready = false;
+
+  function $(id){ return document.getElementById(id); }
+  var toastT=null;
+  function toast(m){ var t=$("toast"); t.textContent=m; t.className="toast show";
+    clearTimeout(toastT); toastT=setTimeout(function(){ t.className="toast"; },3000); }
+
+  function send(obj){
+    try { Office.context.ui.messageParent(JSON.stringify(obj)); } catch(e){}
+  }
+
+  function draw(){
+    Cal.statusKey($("skey"), items);
+    Cal.render($("calendar"), items, {
+      hidden: hidden,
+      density: $("density").value,
+      perRow: $("perRow").value,
+      showDates: $("showDates").checked
+    });
+    bindDays();
+    buildPngMenu();
+  }
+
+  /* ---------- PNG export ---------- */
+  var capturing = false;
+  function safeName(s){ return String(s||"timetable").replace(/[^\w\-]+/g,"_").replace(/^_+|_+$/g,"")||"timetable"; }
+  function baseTitle(){ return safeName($("ttl").textContent || "Timetable"); }
+  function closePngMenu(){ $("pngMenu").classList.remove("open"); }
+
+  function buildPngMenu(){
+    var menu = $("pngMenu"); menu.innerHTML = "";
+    var months = [].slice.call(document.querySelectorAll("#calendar .month"));
+    var all = document.createElement("button");
+    all.textContent = "🗓  All months — one image";
+    all.onclick = function(){ closePngMenu(); exportAll(); };
+    menu.appendChild(all);
+    if (months.length) {
+      var hd = document.createElement("div"); hd.className = "hd";
+      hd.textContent = "Single month"; menu.appendChild(hd);
+      months.forEach(function(m){
+        var name = ((m.querySelector(".mhead") || {}).textContent || "month").trim();
+        var b = document.createElement("button");
+        b.textContent = "🖼  " + name;
+        b.onclick = function(){ closePngMenu(); exportOne(m, name); };
+        menu.appendChild(b);
+      });
+    }
+  }
+
+  function grab(el){
+    return html2canvas(el, {
+      backgroundColor: "#ffffff", scale: 2, useCORS: true, logging: false,
+      windowWidth: document.documentElement.scrollWidth,
+      onclone: function(doc){ doc.body.classList.add("pngfix"); }
+    });
+  }
+  function saveCanvas(canvas, filename){
+    return new Promise(function(res, rej){
+      if (canvas.toBlob) {
+        canvas.toBlob(function(blob){
+          if (!blob) { rej(new Error("empty image")); return; }
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement("a"); a.href = url; a.download = filename;
+          document.body.appendChild(a); a.click();
+          setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); res(); }, 800);
+        }, "image/png");
+      } else {
+        var a2 = document.createElement("a");
+        a2.href = canvas.toDataURL("image/png"); a2.download = filename;
+        document.body.appendChild(a2); a2.click(); a2.remove(); res();
+      }
+    });
+  }
+  function exportEl(el, filename, label){
+    if (!window.html2canvas) { toast("PNG library not loaded — reload the window"); return; }
+    if (capturing) return;
+    capturing = true; toast("Rendering " + label + "…");
+    grab(el)
+      .then(function(c){ return saveCanvas(c, filename); })
+      .then(function(){ toast("Saved " + filename); })
+      .catch(function(e){ toast("PNG failed: " + (e && e.message || e)); })
+      .then(function(){ capturing = false; });
+  }
+  function exportOne(monthEl, name){
+    exportEl(monthEl, baseTitle() + "_" + safeName(name) + ".png", name);
+  }
+  function exportAll(){
+    var target = document.querySelector("#calendar .months") || $("calendar");
+    exportEl(target, baseTitle() + "_all_months.png", "all months");
+  }
+
+  Office.onReady(function () {
+    Office.context.ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived,
+      function (arg) {
+        var m; try { m = JSON.parse(arg.message); } catch(e){ return; }
+        if (m.op === "data") {
+          items = m.items || [];
+          hidden = m.hidden || [];
+          available = m.available || available;
+          if (m.title) { $("ttl").textContent = m.title; document.title = m.title; }
+          if (!ready && m.density) { $("density").value = m.density; }
+          if (!ready) { $("showDates").checked = !!m.showDates; ready = true; }
+          draw();
+        }
+      },
+      function () { send({ op: "ready" }); });
+
+    ["density","perRow","showDates"].forEach(function(id){
+      $(id).addEventListener("change", function(){
+        draw();
+        send({ op:"prefs", density:$("density").value, showDates:$("showDates").checked });
+      });
+    });
+    $("printBtn").addEventListener("click", function(){ window.print(); });
+    $("undoBtn").addEventListener("click", function(){ send({ op:"undo" }); toast("Undo…"); });
+    $("pngBtn").addEventListener("click", function(e){
+      e.stopPropagation(); $("pngMenu").classList.toggle("open");
+    });
+    document.addEventListener("click", function(e){
+      if (!e.target.closest(".pngwrap")) closePngMenu();
+    });
+  });
+
+  /* jump to the row in Excel — unless a drag (move/resize) just happened */
+  document.addEventListener("click", function(e){
+    if (Cal._suppressClick) { Cal._suppressClick = false; e.stopPropagation(); return; }
+    var el = e.target.closest("[data-jump]");
+    if (el) { e.stopPropagation(); send({ op:"select", id: el.dataset.jump }); toast("Selected in Excel"); }
+  }, true);
+
+  /* drag to move/resize; right-click a box to add/edit its text */
+  Cal.enableDrag(document.getElementById("calendar"), {
+    canResize: function(){ return available.indexOf("end") >= 0; },
+    onEdit: function(id, start, end){
+      send({ op:"setdates", id:id, start:start, end:end });
+      toast("Updating Excel…");
+    },
+    onRename: function(id, name){
+      send({ op:"update", id:id, field:"name", value:name });
+      toast("Updating Excel…");
+    },
+    onSelect: function(id){ send({ op:"select", id:id }); },
+    onAdd: function(date, name){
+      send({ op:"add", start:date, end:"", name:name });
+      toast("Adding to Excel…");
+    },
+    onDelete: function(id){
+      send({ op:"delete", id:id });
+      toast("Removing from Excel…");
+    }
+  });
+
+  /* click / drag a day range to create a task */
+  var sel = { active:false, start:null, end:null };
+  function paintSel(){
+    var a=sel.start,b=sel.end, lo=a<b?a:b, hi=a<b?b:a;
+    document.querySelectorAll(".day").forEach(function(c){
+      c.classList.toggle("selrange", c.dataset.date>=lo && c.dataset.date<=hi); });
+  }
+  function bindDays(){
+    document.querySelectorAll(".day").forEach(function(cell){
+      cell.addEventListener("mousedown", function(e){
+        if (e.target.closest("[data-jump]")) return;
+        e.preventDefault(); sel.active=true;
+        sel.start=cell.dataset.date; sel.end=cell.dataset.date; paintSel();
+      });
+      cell.addEventListener("mouseenter", function(){
+        if (sel.active) { sel.end=cell.dataset.date; paintSel(); } });
+    });
+  }
+  document.addEventListener("mouseup", function(){
+    if (!sel.active) return;
+    sel.active=false;
+    var a=sel.start, b=sel.end;
+    document.querySelectorAll(".day.selrange").forEach(function(c){ c.classList.remove("selrange"); });
+    sel.start=sel.end=null;
+    if (!a) return;
+    var lo=a<b?a:b, hi=a<b?b:a;
+    send({ op:"add", start:lo, end:(lo===hi?"":hi) });
+    toast("Row added — name it in the task pane");
+  });
+})();
+</script>
+</body>
+</html>
