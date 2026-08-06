@@ -100,8 +100,8 @@
     if (record){ var it=itemById(id); var os=it?it.start:"", oe=it?(it.end||""):""; pushUndo(function(){ applySetDates(id, os, oe, false); }); }
     act(Xl.setDates(cfg, id, start, end)).catch(function(){});
   }
-  function applyAdd(date, name, record){
-    act(Xl.add(cfg, date, "", name)).then(function(r){
+  function applyAdd(start, end, name, record){
+    act(Xl.add(cfg, start, end, name)).then(function(r){
       if (record && r && r.id) pushUndo(function(){ act(Xl.remove(cfg, r.id)).catch(function(){}); });
     }).catch(function(){});
   }
@@ -218,7 +218,8 @@
     onEdit:   function(id, start, end){ applySetDates(id, start, end, true); },
     onRename: function(id, name){ applyUpdate(id, "name", name, true); },
     onSelect: function(id){ Xl.selectRow(cfg, id).catch(function(){}); },
-    onAdd:    function(date, name){ applyAdd(date, name, true); },
+    onAdd:    function(date, name){ applyAdd(date, "", name, true); },
+    onCreate: function(start, end){ applyAdd(start, end, "", true); },
     onDelete: function(id){ applyDelete(id, true); }
   });
 
@@ -326,7 +327,7 @@
     if(m.op==="select"){ Xl.selectRow(cfg,m.id).catch(function(){}); return; }
     if(m.op==="update"){ applyUpdate(m.id,m.field,m.value,true); return; }
     if(m.op==="setdates"){ applySetDates(m.id,m.start,m.end,true); return; }
-    if(m.op==="add"){ applyAdd(m.start,m.name,true); return; }
+    if(m.op==="add"){ applyAdd(m.start,m.end||"",m.name,true); return; }
     if(m.op==="delete"){ applyDelete(m.id,true); return; }
     if(m.op==="undo"){ doUndo(); return; }
     if(m.op==="prefs"){
@@ -357,7 +358,7 @@
         toast("Found "+r.headers.length+" columns at "+cell);
       }).catch(function(e){ toast(e.message||String(e),true); });
     });
-    $("addBtn").addEventListener("click",function(){ applyAdd("", "", true); });
+    $("addBtn").addEventListener("click",function(){ applyAdd("", "", "", true); });
     $("undoBtn").addEventListener("click",function(){ doUndo(); });
     $("sortBtn").addEventListener("click",function(){
       act(Xl.sortByDate(cfg)).then(function(){ toast("Rows sorted by start date"); }).catch(function(){}); });

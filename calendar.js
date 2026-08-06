@@ -301,8 +301,17 @@
 
   function enableDrag(root, opts){
     opts = opts || {};
-    var drag = null, tip = null;
+    var drag = null, tip = null, daySel = null;
     var canResize = opts.canResize || function(){ return true; };
+
+    function paintRange(lo, hi){
+      root.querySelectorAll(".day").forEach(function(c){
+        c.classList.toggle("selrange", c.dataset.date >= lo && c.dataset.date <= hi);
+      });
+    }
+    function clearRange(){
+      root.querySelectorAll(".day.selrange").forEach(function(c){ c.classList.remove("selrange"); });
+    }
 
     function weekUnder(x, y){
       var el = document.elementFromPoint(x, y);
@@ -326,11 +335,13 @@
       return addDays(parseD(wk.dataset.wkstart), idx);
     }
     function zoneOf(bar, x){
-      if (bar.classList.contains("msi")) return "move";       // single-day: move only
       if (!canResize()) return "move";                        // no End column mapped
       var r = bar.getBoundingClientRect();
-      if (!bar.dataset.contl && (x - r.left) <= EDGE) return "left";
-      if (!bar.dataset.contr && (r.right - x) <= EDGE) return "right";
+      // Milestones (single-day) have no continuation flags; allowing their edges
+      // to resize is what lets you drag a one-day box out into a multi-day span.
+      var msi = bar.classList.contains("msi");
+      if ((msi || !bar.dataset.contl) && (x - r.left) <= EDGE) return "left";
+      if ((msi || !bar.dataset.contr) && (r.right - x) <= EDGE) return "right";
       return "move";
     }
     function showTip(x, y, text){
@@ -443,40 +454,63 @@
     root.addEventListener("mousedown", function(e){
       if (e.button !== 0) return;
       var bar = e.target.closest ? e.target.closest(".bar,.msi") : null;
-      if (!bar || !bar.dataset.jump) return;
-      e.preventDefault(); e.stopPropagation();
-      drag = { id: bar.dataset.jump, bar: bar, mode: zoneOf(bar, e.clientX),
-               origStart: bar.dataset.start, origEnd: bar.dataset.end || "",
-               anchor: dateAt(e.clientX, e.clientY) || parseD(bar.dataset.start),
-               downX: e.clientX, moved: false, pending: null };
-      bar.style.pointerEvents = "none";           // let dateAt see cells beneath
-      document.body.classList.add("dragging");
+      if (bar && bar.dataset.jump){
+        e.preventDefault(); e.stopPropagation();
+        drag = { id: bar.dataset.jump, bar: bar, mode: zoneOf(bar, e.clientX),
+                 origStart: bar.dataset.start, origEnd: bar.dataset.end || "",
+                 anchor: dateAt(e.clientX, e.clientY) || parseD(bar.dataset.start),
+                 downX: e.clientX, moved: false, pending: null };
+        bar.style.pointerEvents = "none";         // let dateAt see cells beneath
+        document.body.classList.add("dragging");
+        return;
+      }
+      // Empty day: begin a create-selection. Drag across days for a span.
+      var day = e.target.closest ? e.target.closest(".day") : null;
+      if (day && day.dataset.date && opts.onCreate){
+        e.preventDefault();
+        daySel = { start: day.dataset.date, end: day.dataset.date, moved: false };
+        paintRange(day.dataset.date, day.dataset.date);
+      }
     });
 
     document.addEventListener("mousemove", function(e){
-      if (!drag) return;
-      var cur = dateAt(e.clientX, e.clientY); if (!cur) return;
-      if (Math.abs(e.clientX - drag.downX) > 3) drag.moved = true;
-      var d = computeDates(cur); drag.pending = d;
-      var lo = d.start, hi = d.end || d.start;
-      root.querySelectorAll(".day").forEach(function(c){
-        c.classList.toggle("selrange", c.dataset.date >= lo && c.dataset.date <= hi);
-      });
-      var verb = drag.mode === "move" ? "" : (drag.mode === "left" ? "start " : "end ");
-      showTip(e.clientX, e.clientY, verb + fmtNice(d.start) + (d.end ? " → " + fmtNice(d.end) : ""));
+      if (drag){
+        var cur = dateAt(e.clientX, e.clientY); if (!cur) return;
+        if (Math.abs(e.clientX - drag.downX) > 3) drag.moved = true;
+        var d = computeDates(cur); drag.pending = d;
+        paintRange(d.start, d.end || d.start);
+        var verb = drag.mode === "move" ? "" : (drag.mode === "left" ? "start " : "end ");
+        showTip(e.clientX, e.clientY, verb + fmtNice(d.start) + (d.end ? " → " + fmtNice(d.end) : ""));
+        return;
+      }
+      if (daySel){
+        var c2 = dateAt(e.clientX, e.clientY); if (!c2) return;
+        daySel.end = fmtISO(c2); daySel.moved = true;
+        var lo = daySel.start < daySel.end ? daySel.start : daySel.end;
+        var hi = daySel.start < daySel.end ? daySel.end : daySel.start;
+        paintRange(lo, hi);
+        showTip(e.clientX, e.clientY, fmtNice(lo) + (lo !== hi ? " → " + fmtNice(hi) : ""));
+      }
     });
 
     document.addEventListener("mouseup", function(){
-      if (!drag) return;
-      var dr = drag; drag = null;
-      document.body.classList.remove("dragging");
-      dr.bar.style.pointerEvents = "";
-      root.querySelectorAll(".day.selrange").forEach(function(c){ c.classList.remove("selrange"); });
-      hideTip();
-      if (dr.moved && dr.pending &&
-          (dr.pending.start !== dr.origStart || dr.pending.end !== dr.origEnd)) {
-        global.Cal._suppressClick = true;         // don't also fire click→select
-        if (opts.onEdit) opts.onEdit(dr.id, dr.pending.start, dr.pending.end);
+      if (drag){
+        var dr = drag; drag = null;
+        document.body.classList.remove("dragging");
+        dr.bar.style.pointerEvents = "";
+        clearRange(); hideTip();
+        if (dr.moved && dr.pending &&
+            (dr.pending.start !== dr.origStart || dr.pending.end !== dr.origEnd)) {
+          global.Cal._suppressClick = true;       // don't also fire click→select
+          if (opts.onEdit) opts.onEdit(dr.id, dr.pending.start, dr.pending.end);
+        }
+        return;
+      }
+      if (daySel){
+        var s = daySel.start, e2 = daySel.end; daySel = null;
+        clearRange(); hideTip();
+        var lo = s < e2 ? s : e2, hi = s < e2 ? e2 : s;
+        if (opts.onCreate) opts.onCreate(lo, lo === hi ? "" : hi);
       }
     });
   }

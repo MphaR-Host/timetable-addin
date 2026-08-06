@@ -94,7 +94,6 @@
       perRow: $("perRow").value,
       showDates: $("showDates").checked
     });
-    bindDays();
     buildPngMenu();
   }
 
@@ -224,37 +223,12 @@
     onDelete: function(id){
       send({ op:"delete", id:id });
       toast("Removing from Excel…");
+    },
+    // drag across empty days to create a task spanning that range
+    onCreate: function(start, end){
+      send({ op:"add", start:start, end:end, name:"" });
+      toast(end ? "Added multi-day task — name it (right-click)" : "Added task — name it (right-click)");
     }
-  });
-
-  /* click / drag a day range to create a task */
-  var sel = { active:false, start:null, end:null };
-  function paintSel(){
-    var a=sel.start,b=sel.end, lo=a<b?a:b, hi=a<b?b:a;
-    document.querySelectorAll(".day").forEach(function(c){
-      c.classList.toggle("selrange", c.dataset.date>=lo && c.dataset.date<=hi); });
-  }
-  function bindDays(){
-    document.querySelectorAll(".day").forEach(function(cell){
-      cell.addEventListener("mousedown", function(e){
-        if (e.target.closest("[data-jump]")) return;
-        e.preventDefault(); sel.active=true;
-        sel.start=cell.dataset.date; sel.end=cell.dataset.date; paintSel();
-      });
-      cell.addEventListener("mouseenter", function(){
-        if (sel.active) { sel.end=cell.dataset.date; paintSel(); } });
-    });
-  }
-  document.addEventListener("mouseup", function(){
-    if (!sel.active) return;
-    sel.active=false;
-    var a=sel.start, b=sel.end;
-    document.querySelectorAll(".day.selrange").forEach(function(c){ c.classList.remove("selrange"); });
-    sel.start=sel.end=null;
-    if (!a) return;
-    var lo=a<b?a:b, hi=a<b?b:a;
-    send({ op:"add", start:lo, end:(lo===hi?"":hi) });
-    toast("Row added — name it in the task pane");
   });
 })();
 </script>
