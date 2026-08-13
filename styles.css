@@ -106,6 +106,30 @@ select,input[type=text],input[type=date]{border:1px solid var(--line);border-rad
 .swatch{width:12px;height:12px;border-radius:3px;display:inline-block;margin-top:2px;}
 .st-Done{text-decoration:line-through;opacity:.75;}
 
+/* ---- landscape "slide-ready" PNG export ----
+   Off-screen frame rendered only during capture: calendar on the left, the
+   month's guide lifted out to a card on the right. Fixed wide geometry so the
+   image is a predictable landscape shape regardless of the on-screen layout,
+   and captured at scale 3 so it stays crisp when blown up to fill a slide. */
+.exp-frame{position:fixed;left:-10000px;top:0;width:1180px;background:#fff;
+  padding:26px;font-family:"Segoe UI",-apple-system,Arial,sans-serif;color:var(--ink);}
+/* stretch: the guide card grows to the calendar's height, so the right side is
+   a full-height panel rather than a short floating box. The 16:9 letterboxing
+   is applied afterwards on the canvas, not here. */
+.exp-body{display:flex;gap:24px;align-items:stretch;}
+/* Calendar : guide width = 3 : 2 */
+.exp-cal{flex:3 1 0;min-width:0;}
+.exp-cal .month{border:1px solid var(--line);border-radius:12px;}
+.exp-guide{flex:2 1 0;min-width:0;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;}
+.exp-guide-h{background:var(--accent);color:#fff;font-weight:700;font-size:17px;
+  padding:11px 16px;letter-spacing:.01em;}
+.exp-guide .legend{border-top:none;padding:14px 16px;font-size:15px;}
+.exp-guide .legend .li{margin-bottom:11px;align-items:center;}
+.exp-guide .legend .li:last-child{margin-bottom:0;}
+.exp-guide .legend .d{flex:0 0 64px;font-size:15px;}
+.exp-guide .legend .sg{font-size:16px;}
+.exp-guide .swatch{width:15px;height:15px;margin-top:0;}
+
 /* ---- modal ---- */
 .modal{position:fixed;inset:0;background:rgba(20,28,38,.55);display:none;align-items:flex-start;
        justify-content:center;padding:18px 12px;overflow:auto;z-index:50;}

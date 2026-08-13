@@ -103,6 +103,7 @@
   function baseTitle(){ return safeName($("ttl").textContent || "Timetable"); }
   function closePngMenu(){ $("pngMenu").classList.remove("open"); }
 
+  function monthName(m){ return ((m.querySelector(".mhead") || {}).textContent || "month").trim(); }
   function buildPngMenu(){
     var menu = $("pngMenu"); menu.innerHTML = "";
     var months = [].slice.call(document.querySelectorAll("#calendar .month"));
@@ -111,23 +112,99 @@
     all.onclick = function(){ closePngMenu(); exportAll(); };
     menu.appendChild(all);
     if (months.length) {
-      var hd = document.createElement("div"); hd.className = "hd";
-      hd.textContent = "Single month"; menu.appendChild(hd);
+      var hdL = document.createElement("div"); hdL.className = "hd";
+      hdL.textContent = "Landscape 16:9 — slide-ready (calendar + guide)"; menu.appendChild(hdL);
       months.forEach(function(m){
-        var name = ((m.querySelector(".mhead") || {}).textContent || "month").trim();
+        var name = monthName(m);
         var b = document.createElement("button");
-        b.textContent = "🖼  " + name;
+        b.textContent = "🖥  " + name;
+        b.onclick = function(){ closePngMenu(); exportLandscape(m, name); };
+        menu.appendChild(b);
+      });
+      var hd = document.createElement("div"); hd.className = "hd";
+      hd.textContent = "Vertical — calendar + guide below"; menu.appendChild(hd);
+      months.forEach(function(m){
+        var name = monthName(m);
+        var b = document.createElement("button");
+        b.textContent = "📄  " + name;
         b.onclick = function(){ closePngMenu(); exportOne(m, name); };
         menu.appendChild(b);
       });
     }
   }
 
+  /* Wait for web fonts before snapping, or html2canvas can capture a fallback
+     face and shift the layout so the PNG differs from what's on screen. */
+  function afterFonts(fn){
+    if (document.fonts && document.fonts.ready && document.fonts.ready.then)
+      document.fonts.ready.then(fn, fn);
+    else fn();
+  }
+  /* Center the captured content on a white 16:9 canvas (letterbox), so the
+     landscape PNG is always exactly 16:9 without scaling or distorting the
+     calendar — only symmetric white margins are added. */
+  function letterbox169(src){
+    var ratio = 16/9, W = src.width, H = src.height, bw, bh;
+    if (W/H >= ratio){ bw = W; bh = Math.round(W/ratio); }
+    else { bh = H; bw = Math.round(H*ratio); }
+    var out = document.createElement("canvas"); out.width = bw; out.height = bh;
+    var ctx = out.getContext("2d");
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,bw,bh);
+    ctx.drawImage(src, Math.round((bw-W)/2), Math.round((bh-H)/2));
+    return out;
+  }
   function grab(el){
     return html2canvas(el, {
       backgroundColor: "#ffffff", scale: 2, useCORS: true, logging: false,
       windowWidth: document.documentElement.scrollWidth,
       onclone: function(doc){ doc.body.classList.add("pngfix"); }
+    });
+  }
+  /* Landscape "slide-ready" export: build an off-screen frame with the month
+     grid on the left and its guide lifted out to a card on the right, then
+     capture the whole frame at scale 3. Uses the density currently selected in
+     the toolbar, so pick Large / Extra large for the crispest slide fill. */
+  function exportLandscape(monthEl, name){
+    if (!window.html2canvas) { toast("PNG library not loaded — reload the window"); return; }
+    if (capturing) return;
+    capturing = true; toast("Rendering " + name + " (landscape)…");
+
+    var frame = document.createElement("div");
+    frame.className = "exp-frame";
+
+    var body = document.createElement("div"); body.className = "exp-body";
+
+    var monthClone = monthEl.cloneNode(true);           // keeps every inline style
+    var legend = monthClone.querySelector(".legend");
+    if (legend) legend.parentNode.removeChild(legend);  // move it to the right card
+
+    var cal = document.createElement("div"); cal.className = "exp-cal";
+    cal.appendChild(monthClone);
+    body.appendChild(cal);
+
+    var guide = document.createElement("div"); guide.className = "exp-guide";
+    guide.innerHTML = '<div class="exp-guide-h">Guide</div>';
+    if (legend) guide.appendChild(legend);
+    body.appendChild(guide);
+
+    frame.appendChild(body);
+    document.body.appendChild(frame);
+
+    // The clone is now a different width than the live grid, so milestone
+    // stacks wrap differently — re-run the height balancer over the frame.
+    try { Cal.balanceWeeks(frame); } catch(e){}
+
+    var filename = baseTitle() + "_" + safeName(name) + "_landscape.png";
+    afterFonts(function(){
+      html2canvas(frame, {
+        backgroundColor: "#ffffff", scale: 3, useCORS: true, logging: false,
+        width: frame.offsetWidth, windowWidth: frame.scrollWidth,
+        onclone: function(doc){ doc.body.classList.add("pngfix"); }
+      })
+      .then(function(c){ return saveCanvas(letterbox169(c), filename); })
+      .then(function(){ toast("Saved " + filename); })
+      .catch(function(e){ toast("PNG failed: " + (e && e.message || e)); })
+      .then(function(){ if (frame.parentNode) frame.parentNode.removeChild(frame); capturing = false; });
     });
   }
   function saveCanvas(canvas, filename){
@@ -151,11 +228,13 @@
     if (!window.html2canvas) { toast("PNG library not loaded — reload the window"); return; }
     if (capturing) return;
     capturing = true; toast("Rendering " + label + "…");
-    grab(el)
-      .then(function(c){ return saveCanvas(c, filename); })
-      .then(function(){ toast("Saved " + filename); })
-      .catch(function(e){ toast("PNG failed: " + (e && e.message || e)); })
-      .then(function(){ capturing = false; });
+    afterFonts(function(){
+      grab(el)
+        .then(function(c){ return saveCanvas(c, filename); })
+        .then(function(){ toast("Saved " + filename); })
+        .catch(function(e){ toast("PNG failed: " + (e && e.message || e)); })
+        .then(function(){ capturing = false; });
+    });
   }
   function exportOne(monthEl, name){
     exportEl(monthEl, baseTitle() + "_" + safeName(name) + ".png", name);
