@@ -21,6 +21,9 @@
   .pngmenu button:hover{background:#f0f3f7;}
   .pngmenu .hd{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);
     padding:6px 10px 2px;font-weight:700;}
+  .viewtog{display:inline-flex;gap:2px;background:rgba(255,255,255,.12);border-radius:7px;padding:2px;}
+  .viewtog .hbtn{border:0;background:transparent;}
+  .viewtog .hbtn.on{background:#fff;color:var(--accent);}
   /* html2canvas 1.4.1 does not render inset box-shadows, which is how the
      Pending "hollow" and the Done/milestone edges are drawn. During capture we
      swap those insets for real borders so the statuses survive the snapshot. */
@@ -35,27 +38,34 @@
 <div class="bar-top">
   <span class="t" id="ttl">Timetable</span>
   <button class="hbtn" id="undoBtn" title="Undo the last change">↩ Undo</button>
-  <label class="mini" style="color:#fff">Size
-    <select id="density">
-      <option value="compact">Compact</option>
-      <option value="comfortable">Comfortable</option>
-      <option value="large" selected>Large</option>
-      <option value="xlarge">Extra large</option>
-    </select>
-  </label>
-  <label class="mini" style="color:#fff">Months per row
-    <select id="perRow">
-      <option value="auto" selected>Auto</option>
-      <option value="1">1</option><option value="2">2</option>
-      <option value="3">3</option><option value="4">4</option>
-    </select>
-  </label>
-  <label class="mini" style="color:#fff"><input type="checkbox" id="showDates"> dates on bars</label>
-  <div class="pngwrap">
-    <button class="hbtn" id="pngBtn">🖼 Save PNG ▾</button>
-    <div class="pngmenu" id="pngMenu"></div>
-  </div>
-  <button class="hbtn" id="printBtn">🖨 Print / PDF</button>
+  <span class="viewtog">
+    <button class="hbtn on" id="viewCal">📅 Calendar</button>
+    <button class="hbtn" id="viewAnno">🏷 Annotated</button>
+  </span>
+  <span id="calControls" style="display:contents">
+    <label class="mini" style="color:#fff">Size
+      <select id="density">
+        <option value="compact">Compact</option>
+        <option value="comfortable">Comfortable</option>
+        <option value="large" selected>Large</option>
+        <option value="xlarge">Extra large</option>
+      </select>
+    </label>
+    <label class="mini" style="color:#fff">Months per row
+      <select id="perRow">
+        <option value="auto" selected>Auto</option>
+        <option value="1">1</option><option value="2">2</option>
+        <option value="3">3</option><option value="4">4</option>
+      </select>
+    </label>
+    <label class="mini" style="color:#fff"><input type="checkbox" id="showDates"> dates on bars</label>
+    <div class="pngwrap">
+      <button class="hbtn" id="pngBtn">🖼 Save PNG ▾</button>
+      <div class="pngmenu" id="pngMenu"></div>
+    </div>
+    <button class="hbtn" id="printBtn">🖨 Print / PDF</button>
+  </span>
+  <button class="hbtn" id="annoPng" style="display:none">🖼 Export PNG</button>
 </div>
 
 <div class="wrapbig">
@@ -65,11 +75,14 @@
   </div>
   <div class="skey" id="skey"></div>
   <div id="calendar"></div>
+  <div id="annoBar" class="anno-bar" style="display:none"></div>
+  <div id="annoWrap" style="display:none"><div id="annoBoard" class="an-board"></div></div>
 </div>
 
 <div class="toast" id="toast"></div>
 
 <script src="calendar.js"></script>
+<script src="annotated.js"></script>
 <script>
 /* The dialog cannot reach the Excel object model, so it asks the task pane to
    act on its behalf and receives the data back the same way. */
@@ -86,7 +99,9 @@
     try { Office.context.ui.messageParent(JSON.stringify(obj)); } catch(e){}
   }
 
+  var view = "cal";
   function draw(){
+    if (view === "anno") { if (Annotated.isMounted()) Annotated.update(items); return; }
     Cal.statusKey($("skey"), items);
     Cal.render($("calendar"), items, {
       hidden: hidden,
@@ -95,6 +110,29 @@
       showDates: $("showDates").checked
     });
     buildPngMenu();
+  }
+
+  /* Switch between the calendar view and the annotated (slide) view. */
+  function ensureAnnoMounted(){
+    if (Annotated.isMounted()) return;
+    Annotated.mount($("annoBoard"), $("annoBar"), {
+      storeKey: ($("ttl").textContent || "timetable"),
+      canResize: function(){ return available.indexOf("end") >= 0; },
+      onEdit: function(id, start, end){ send({ op:"setdates", id:id, start:start, end:end }); toast("Updating Excel…"); }
+    });
+  }
+  function setView(v){
+    view = v;
+    var anno = v === "anno";
+    ["hint","skey","calendar"].forEach(function(id){ var e=$(id); if(e) e.style.display = anno ? "none" : ""; });
+    $("calControls").style.display = anno ? "none" : "contents";
+    $("annoPng").style.display = anno ? "" : "none";
+    $("annoBar").style.display = anno ? "flex" : "none";
+    $("annoWrap").style.display = anno ? "block" : "none";
+    $("viewCal").classList.toggle("on", !anno);
+    $("viewAnno").classList.toggle("on", anno);
+    if (anno) ensureAnnoMounted();
+    draw();
   }
 
   /* ---------- PNG export ---------- */
@@ -270,6 +308,19 @@
     $("undoBtn").addEventListener("click", function(){ send({ op:"undo" }); toast("Undo…"); });
     $("pngBtn").addEventListener("click", function(e){
       e.stopPropagation(); $("pngMenu").classList.toggle("open");
+    });
+    $("viewCal").addEventListener("click", function(){ setView("cal"); });
+    $("viewAnno").addEventListener("click", function(){ setView("anno"); });
+    $("annoPng").addEventListener("click", function(){
+      if (!window.html2canvas) { toast("PNG library not loaded — reload the window"); return; }
+      if (capturing) return; capturing = true; toast("Rendering annotated view…");
+      afterFonts(function(){
+        Annotated.exportCanvas(window.html2canvas)
+          .then(function(c){ return saveCanvas(c, baseTitle() + "_annotated.png"); })
+          .then(function(){ toast("Saved " + baseTitle() + "_annotated.png"); })
+          .catch(function(e){ toast("PNG failed: " + (e && e.message || e)); })
+          .then(function(){ capturing = false; });
+      });
     });
     document.addEventListener("click", function(e){
       if (!e.target.closest(".pngwrap")) closePngMenu();
