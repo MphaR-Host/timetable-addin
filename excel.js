@@ -366,6 +366,31 @@
     });
   }
 
+  /* Make sure a Colour column exists and is mapped, adding one if needed, so a
+     right-click recolour in the annotated view lands in the sheet (and colours
+     the calendar view too). */
+  function ensureColorColumn(cfg){
+    if(cfg.mapping.color) return Promise.resolve(false);
+    return Excel.run(function(ctx){
+      return grid(ctx,cfg).then(function(g){
+        var lower=g.headers.map(function(h){ return String(h).toLowerCase().trim(); });
+        var idx=lower.indexOf("colour"); if(idx<0) idx=lower.indexOf("color");
+        if(idx>=0){ cfg.mapping.color=g.headers[idx]; return ctx.sync().then(function(){ return false; }); }
+        if(g.isTable){
+          g.table.columns.add(null, null, "Colour"); cfg.mapping.color="Colour";
+          return ctx.sync().then(function(){ return true; });
+        }
+        // plain range: write a header cell just past the last column
+        g.sheet.getCell(g.firstRow-1, g.firstCol+g.ncols).values=[["Colour"]];
+        cfg.mapping.color="Colour";
+        return ctx.sync().then(function(){ return true; });
+      });
+    }).then(function(added){ return saveConfig(cfg).then(function(){ return added; }); });
+  }
+  function setColor(cfg,id,value){
+    return ensureColorColumn(cfg).then(function(){ return update(cfg,id,"color",value); });
+  }
+
   // Move / resize writes both dates in one round trip so the bar never lands
   // half-updated. `end` of "" clears the End cell (task becomes single-day).
   function setDates(cfg,id,start,end){
@@ -487,7 +512,7 @@
     loadConfig:loadConfig, saveConfig:saveConfig, defaults:defaults,
     loadDesign:loadDesign, saveDesign:saveDesign,
     listSources:listSources, headersAt:headersAt, isCellRef:isCellRef,
-    read:read, update:update, setDates:setDates, add:add, addFull:addFull, remove:remove,
+    read:read, update:update, setColor:setColor, setDates:setDates, add:add, addFull:addFull, remove:remove,
     sortByDate:sortByDate, selectRow:selectRow, watch:watch,
     toStatus:toStatus, toISO:toISO, isoToSerial:isoToSerial, serialToISO:serialToISO
   };

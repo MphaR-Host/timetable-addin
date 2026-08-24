@@ -94,7 +94,7 @@
 
   function applyUpdate(id, field, value, record){
     if (record){ var it=itemById(id); var old = it ? it[field] : ""; pushUndo(function(){ applyUpdate(id, field, old, false); }); }
-    act(Xl.update(cfg, id, field, value)).catch(function(){});
+    act(field==="color" ? Xl.setColor(cfg, id, value) : Xl.update(cfg, id, field, value)).catch(function(){});
   }
   function applySetDates(id, start, end, record){
     if (record){ var it=itemById(id); var os=it?it.start:"", oe=it?(it.end||""):""; pushUndo(function(){ applySetDates(id, os, oe, false); }); }

@@ -59,6 +59,9 @@
             monthPos:{}, monthMoved:{}, colorOverride:{}, extraArrows:{},
             userPlaced:{}, known:null, sel:null, selSet:{}, undo:[], ctx:null };
   function ast(id){ return S.arrow[id]||(S.arrow[id]={startOff:null,wp:null,end:null}); }
+  function extras(id){ return S.extraArrows[id]||(S.extraArrows[id]=[]); }
+  function arrowsOf(id){ return [ast(id)].concat(S.extraArrows[id]||[]); }   // [main, ...extras]
+  function arrowRef(id,ai){ return ai<=0 ? ast(id) : (extras(id)[ai-1]||ast(id)); }
 
   /* ---- undo: snapshot the design fields before each change ---- */
   function snapshotDesign(){ return JSON.stringify({ placed:S.placed, widths:S.widths, arrow:S.arrow,
@@ -216,7 +219,7 @@
     svg.setAttribute("width",S.cw); svg.setAttribute("height",S.ch);
 
     var shownTasks=S.items.filter(function(t){ return taskCells[t.id]; }).sort(function(a,b){ return a.start<b.start?-1:1; });
-    var labels={}, handles={};
+    var labels={};
     shownTasks.forEach(function(t){
       var color=idColor[t.id], tc=ink(color);
       var lab=el("div","an-lbl"); lab.style.background=color; lab.style.color=tc; lab.style.borderColor=color;
@@ -229,11 +232,9 @@
       if(S.placed[t.id]){ lab.style.left=S.placed[t.id].x+"px"; lab.style.top=S.placed[t.id].y+"px"; }
       makeLabelDrag(lab,t.id);
       var g=el("div","an-rsz"); lab.appendChild(g); makeResize(g,lab,t.id);
-      handles[t.id]={ s:mkHandle("start",t.id,color), w:mkHandle("wp",t.id,color), e:mkHandle("end",t.id,color) };
-      board.appendChild(handles[t.id].s); board.appendChild(handles[t.id].w); board.appendChild(handles[t.id].e);
     });
 
-    S.ctx={ tasks:shownTasks, labels:labels, handles:handles, svg:svg, color:idColor };
+    S.ctx={ tasks:shownTasks, labels:labels, svg:svg, color:idColor };
     board._anctx=S.ctx;
     layoutDefaults(false);        // place any not-yet-placed labels into the gutters
     applySelection();
@@ -345,42 +346,53 @@
   }
 
   function drawArrows(){
-    var c=S.ctx; if(!c) return; var b=S.board.getBoundingClientRect(); var out="";
+    var c=S.ctx; if(!c) return; var b=S.board.getBoundingClientRect(); var out=""; var one=selOne();
     c.tasks.forEach(function(t){
-      var s=ast(t.id), lr=rectOf(c.labels[t.id],b);
-      var start={x:lr.x+(s.startOff?s.startOff.x:lr.w/2), y:lr.y+(s.startOff?s.startOff.y:lr.h/2)};
-      var cc=centreOf(c.labels[t.id]._anchor,b), color=c.color[t.id], tip;
-      if(s.end){ tip={x:s.end.x,y:s.end.y}; }
-      else{ var wpd=s.wp||{x:(start.x+cc.x)/2,y:(start.y+cc.y)/2};
-        var hw=cc.w/2,hh=cc.h/2,vx=wpd.x-cc.x,vy=wpd.y-cc.y; if(vx===0&&vy===0){vy=-1;}
-        var k=Math.min(hw/(Math.abs(vx)||1e6),hh/(Math.abs(vy)||1e6)), ul=Math.hypot(vx,vy)||1;
-        tip={x:cc.x+vx*k+(vx/ul), y:cc.y+vy*k+(vy/ul)}; }
-      var wp=s.wp||{x:(start.x+tip.x)/2,y:(start.y+tip.y)/2};
-      var sw = S.selSet[t.id]?3.5:2.5;
-      var ang=Math.atan2(tip.y-wp.y,tip.x-wp.x), ah=8;
-      var p1x=tip.x-ah*Math.cos(ang-0.42),p1y=tip.y-ah*Math.sin(ang-0.42);
-      var p2x=tip.x-ah*Math.cos(ang+0.42),p2y=tip.y-ah*Math.sin(ang+0.42);
-      out+='<path d="M '+start.x+' '+start.y+' Q '+wp.x+' '+wp.y+' '+tip.x+' '+tip.y+'" fill="none" stroke="'+color+'" stroke-width="'+sw+'"/>'
-         +'<polygon points="'+tip.x+','+tip.y+' '+p1x+','+p1y+' '+p2x+','+p2y+'" fill="'+color+'"/>';
-      var H=c.handles[t.id];
-      H.s.style.left=start.x+"px"; H.s.style.top=start.y+"px";
-      H.w.style.left=wp.x+"px"; H.w.style.top=wp.y+"px";
-      H.e.style.left=tip.x+"px"; H.e.style.top=tip.y+"px";
+      var lr=rectOf(c.labels[t.id],b), color=c.color[t.id], cc=centreOf(c.labels[t.id]._anchor,b);
+      arrowsOf(t.id).forEach(function(s, ai){
+        var start={x:lr.x+(s.startOff?s.startOff.x:lr.w/2), y:lr.y+(s.startOff?s.startOff.y:lr.h/2)};
+        var tip;
+        if(s.end){ tip={x:s.end.x,y:s.end.y}; }
+        else if(ai===0){                                   // main arrow: meet the anchor cell's edge
+          var wpd=s.wp||{x:(start.x+cc.x)/2,y:(start.y+cc.y)/2};
+          var hw=cc.w/2,hh=cc.h/2,vx=wpd.x-cc.x,vy=wpd.y-cc.y; if(vx===0&&vy===0){vy=-1;}
+          var k=Math.min(hw/(Math.abs(vx)||1e6),hh/(Math.abs(vy)||1e6)), ul=Math.hypot(vx,vy)||1;
+          tip={x:cc.x+vx*k+(vx/ul), y:cc.y+vy*k+(vy/ul)};
+        } else { tip={x:start.x+40,y:start.y-40}; }
+        var wp=s.wp||{x:(start.x+tip.x)/2,y:(start.y+tip.y)/2};
+        var sw=S.selSet[t.id]?3.5:2.5;
+        var ang=Math.atan2(tip.y-wp.y,tip.x-wp.x), ah=8;
+        var p1x=tip.x-ah*Math.cos(ang-0.42),p1y=tip.y-ah*Math.sin(ang-0.42);
+        var p2x=tip.x-ah*Math.cos(ang+0.42),p2y=tip.y-ah*Math.sin(ang+0.42);
+        out+='<path d="M '+start.x+' '+start.y+' Q '+wp.x+' '+wp.y+' '+tip.x+' '+tip.y+'" fill="none" stroke="'+color+'" stroke-width="'+sw+'"/>'
+           +'<polygon points="'+tip.x+','+tip.y+' '+p1x+','+p1y+' '+p2x+','+p2y+'" fill="'+color+'"/>';
+        if(t.id===one){ positionHandle(t.id,ai,"start",start); positionHandle(t.id,ai,"wp",wp); positionHandle(t.id,ai,"end",tip); }
+      });
     });
     c.svg.innerHTML=out;
   }
+  function positionHandle(id,ai,type,pt){ var h=S._handles && S._handles[id+"|"+ai+"|"+type]; if(h){ h.style.left=pt.x+"px"; h.style.top=pt.y+"px"; } }
 
   /* ---------------- selection (progressive disclosure) ---------------- */
   function selCount(){ return Object.keys(S.selSet).length; }
   function selOne(){ return selCount()===1 ? Object.keys(S.selSet)[0] : null; }
   function applySelection(){
-    var c=S.ctx; if(!c) return; var one=selOne();
-    c.tasks.forEach(function(t){
-      var H=c.handles[t.id], showH=(t.id===one);
-      H.s.style.display=H.w.style.display=H.e.style.display = showH?"block":"none";
-      c.labels[t.id].classList.toggle("an-sel", !!S.selSet[t.id]);
-    });
+    var c=S.ctx; if(!c) return;
+    c.tasks.forEach(function(t){ c.labels[t.id].classList.toggle("an-sel", !!S.selSet[t.id]); });
+    renderHandles();
     drawArrows();
+  }
+  /* Handles exist only for the single selected card, one set (start/bend/end) per arrow. */
+  function renderHandles(){
+    if(!S.board) return;
+    S.board.querySelectorAll(".an-handle").forEach(function(h){ h.remove(); });
+    S._handles={}; var one=selOne(); if(!one || !S.ctx) return;
+    arrowsOf(one).forEach(function(s, ai){
+      ["start","wp","end"].forEach(function(type){
+        var h=mkHandle(type, one, ai, S.ctx.color[one]); S.board.appendChild(h);
+        S._handles[one+"|"+ai+"|"+type]=h;
+      });
+    });
   }
   function selectLabel(id, additive){
     if(additive){ if(S.selSet[id]) delete S.selSet[id]; else S.selSet[id]=1; }
@@ -398,22 +410,33 @@
     return {x:x,y:y};
   }
 
-  function mkHandle(type,id,color){
-    var h=el("div","an-handle"+(type==="wp"?" wp":type==="end"?" end":"")); h.style.display="none";
+  function mkHandle(type,id,ai,color){
+    var h=el("div","an-handle"+(type==="wp"?" wp":type==="end"?" end":"")+(ai>0?" an-handle-extra":""));
     h.style.borderColor=color; if(type!=="wp") h.style.background=color;
+    if(ai>0 && type==="end") h.title="Double-click to remove this arrow";
     h.addEventListener("mousedown",function(e){
       e.preventDefault(); e.stopPropagation(); var b=S.board.getBoundingClientRect(), pushed=false;
-      function move(ev){ if(!pushed){pushUndo();pushed=true;} var px=ev.clientX-b.left, py=ev.clientY-b.top;
-        if(type==="wp") ast(id).wp={x:px,y:py};
+      function move(ev){ if(!pushed){pushUndo();pushed=true;} var px=ev.clientX-b.left, py=ev.clientY-b.top; var a=arrowRef(id,ai);
+        if(type==="wp") a.wp={x:px,y:py};
         else if(type==="end"){
           if(S.snap){ var best=null,bd=14; S.board.querySelectorAll(".an-cell[data-date]").forEach(function(cel){ var r=cel.getBoundingClientRect(); var cx=r.left+r.width/2-b.left, cy=r.top+r.height/2-b.top; var d=Math.hypot(cx-px,cy-py); if(d<bd){bd=d;best={x:cx,y:cy};} }); if(best){px=best.x;py=best.y;} }
-          ast(id).end={x:px,y:py};
-        } else { var lr=rectOf(S.ctx.labels[id],b); ast(id).startOff={x:px-lr.x,y:py-lr.y}; }
+          a.end={x:px,y:py};
+        } else { var lr=rectOf(S.ctx.labels[id],b); a.startOff={x:px-lr.x,y:py-lr.y}; }
         drawArrows(); }
       function up(){ persist(); document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up); }
       document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
     });
+    if(ai>0) h.addEventListener("dblclick", function(e){ e.preventDefault(); e.stopPropagation();
+      pushUndo(); extras(id).splice(ai-1,1); persist(); applySelection(); });
     return h;
+  }
+  /* add a second (or third…) arrow from a card, for an action that spans months */
+  function addExtraArrow(id){
+    pushUndo(); var b=S.board.getBoundingClientRect();
+    var a = S.ctx && S.ctx.labels[id] ? centreOf(S.ctx.labels[id]._anchor,b) : {x:120,y:120};
+    extras(id).push({ startOff:null, wp:null, end:{x:a.x+70, y:a.y+70} });
+    S.selSet={}; S.selSet[id]=1; S.sel=id; persist(); render();
+    toast("Arrow added — drag its ◆ end onto the day it should point to");
   }
 
   function makeResize(g,lab,id){
@@ -456,7 +479,7 @@
     var pop=el("div","an-editor");
     pop.innerHTML='<label class="an-ed-l">Name</label><input class="an-ed-name" type="text">'+
       '<div class="an-ed-row"><label class="an-ed-l">Colour</label><input class="an-ed-color" type="color"></div>'+
-      '<div class="an-ed-btns"><button class="an-btn an-ed-del" data-a="del">Delete</button><span style="flex:1"></span>'+
+      '<div class="an-ed-btns"><button class="an-btn" data-a="arrow">+ Arrow</button><button class="an-btn an-ed-del" data-a="del">Delete</button><span style="flex:1"></span>'+
       '<button class="an-btn" data-a="cancel">Cancel</button><button class="an-btn an-ed-save" data-a="save">Save</button></div>';
     document.body.appendChild(pop);
     var nameI=pop.querySelector(".an-ed-name"); nameI.value=t.name||"";
@@ -473,6 +496,7 @@
     pop.addEventListener("mousedown", function(e){ e.stopPropagation(); });
     pop.addEventListener("click", function(e){ var a=e.target.getAttribute&&e.target.getAttribute("data-a"); if(!a) return;
       if(a==="save") commit(); else if(a==="cancel") closeEditor();
+      else if(a==="arrow"){ closeEditor(); addExtraArrow(id); }
       else if(a==="del"){ closeEditor(); if(S.opts.onDelete) S.opts.onDelete(id); } });
     nameI.addEventListener("keydown", function(e){ if(e.key==="Enter"){e.preventDefault();commit();} else if(e.key==="Escape"){e.preventDefault();closeEditor();} });
     S._editor=pop; setTimeout(function(){ document.addEventListener("mousedown", outsideEditor, true); },0);
