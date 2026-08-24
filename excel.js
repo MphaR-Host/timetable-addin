@@ -104,6 +104,26 @@
     });
   }
 
+  /* Annotated-view design, keyed by sheet, stored inside the workbook so it
+     survives cache clears and travels with the file. */
+  var ANNO_SETTING = "timetableAnno.v1";
+  function loadDesign(key){
+    try { var all=Office.context.document.settings.get(ANNO_SETTING); return (all&&all[key])||null; }
+    catch(e){ return null; }
+  }
+  function saveDesign(key, json){
+    return new Promise(function(res,rej){
+      try{
+        var all=Office.context.document.settings.get(ANNO_SETTING)||{};
+        all[key]=json; Office.context.document.settings.set(ANNO_SETTING, all);
+        Office.context.document.settings.saveAsync(function(r){
+          if(r.status===Office.AsyncResultStatus.Succeeded) res(true);
+          else rej(new Error(r.error?r.error.message:"could not save the design"));
+        });
+      }catch(e){ rej(e); }
+    });
+  }
+
   /* ---- locating the data ---- */
   function isCellRef(s){ return /^[A-Za-z]{1,3}[0-9]{1,7}$/.test(String(s||"").trim()); }
 
@@ -465,6 +485,7 @@
   global.Xl = {
     FIELDS:FIELDS, REQUIRED:REQUIRED, PALETTE:PALETTE,
     loadConfig:loadConfig, saveConfig:saveConfig, defaults:defaults,
+    loadDesign:loadDesign, saveDesign:saveDesign,
     listSources:listSources, headersAt:headersAt, isCellRef:isCellRef,
     read:read, update:update, setDates:setDates, add:add, addFull:addFull, remove:remove,
     sortByDate:sortByDate, selectRow:selectRow, watch:watch,

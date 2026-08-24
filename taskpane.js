@@ -316,9 +316,10 @@
     try { bigDialog.messageChild(JSON.stringify(obj)); } catch(e){}
   }
   function pushToDialog(){
+    var design=null; try{ design=Xl.loadDesign(cfg.sheet); }catch(e){}
     replyToDialog({ op:"data", items:items, available:available,
                     density:cfg.density, showDates:cfg.showDates,
-                    hidden:cfg.hidden||[], title:cfg.sheet });
+                    hidden:cfg.hidden||[], title:cfg.sheet, design:design });
   }
   function onDialogMessage(arg){
     var m;
@@ -327,6 +328,9 @@
     if(m.op==="select"){ Xl.selectRow(cfg,m.id).catch(function(){}); return; }
     if(m.op==="update"){ applyUpdate(m.id,m.field,m.value,true); return; }
     if(m.op==="setdates"){ applySetDates(m.id,m.start,m.end,true); return; }
+    if(m.op==="savedesign"){ Xl.saveDesign(m.key, m.json)
+        .then(function(){ replyToDialog({ op:"toast", msg:"Design saved to workbook" }); })
+        .catch(function(e){ replyToDialog({ op:"toast", msg:"Save failed: "+(e.message||e) }); }); return; }
     if(m.op==="add"){ applyAdd(m.start,m.end||"",m.name,true); return; }
     if(m.op==="delete"){ applyDelete(m.id,true); return; }
     if(m.op==="undo"){ doUndo(); return; }

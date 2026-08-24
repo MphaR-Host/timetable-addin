@@ -27,6 +27,8 @@
   function colorMap(items){
     var map={}, used={}, di=0;
     items.forEach(function(t){
+      var ov=S.colorOverride[t.id];                 // an explicit right-click colour always wins
+      if(ov){ ov=ov.toLowerCase(); used[ov]=1; map[t.id]=ov; return; }
       var c=(t.color||"").toLowerCase();
       if(!c || used[c]){ while(used[DISTINCT[di%DISTINCT.length].toLowerCase()] && di<DISTINCT.length*3) di++;
         c=DISTINCT[di%DISTINCT.length].toLowerCase(); di++; }
@@ -54,17 +56,29 @@
   var S = { board:null, bar:null, items:[], opts:{}, mounted:false, storeKey:"default",
             placed:{}, widths:{}, arrow:{}, selMonths:null, cw:1500, ch:950,
             preset:"custom", perRow:"auto", title:"", lock:false, snap:true,
-            monthPos:{}, monthMoved:{}, userPlaced:{}, known:null, sel:null, ctx:null };
+            monthPos:{}, monthMoved:{}, colorOverride:{}, extraArrows:{},
+            userPlaced:{}, known:null, sel:null, selSet:{}, undo:[], ctx:null };
   function ast(id){ return S.arrow[id]||(S.arrow[id]={startOff:null,wp:null,end:null}); }
+
+  /* ---- undo: snapshot the design fields before each change ---- */
+  function snapshotDesign(){ return JSON.stringify({ placed:S.placed, widths:S.widths, arrow:S.arrow,
+    extraArrows:S.extraArrows, monthPos:S.monthPos, monthMoved:S.monthMoved, colorOverride:S.colorOverride,
+    cw:S.cw, ch:S.ch, title:S.title, selMonths:S.selMonths, perRow:S.perRow }); }
+  function pushUndo(){ S.undo.push(snapshotDesign()); if(S.undo.length>40) S.undo.shift(); }
+  function applyDesignObj(s){ ["placed","widths","arrow","extraArrows","monthPos","monthMoved","colorOverride",
+    "cw","ch","title","selMonths","perRow"].forEach(function(k){ if(s[k]!==undefined) S[k]=s[k]; }); }
+  function undo(){ if(!S.undo.length){ toast("Nothing to undo"); return; }
+    applyDesignObj(JSON.parse(S.undo.pop())); persist(); buildBar(monthsAvail(S.items)); render(); }
   function toast(m){ if(S.opts.onToast) S.opts.onToast(m); }
 
   function persist(){ try{ localStorage.setItem("tt-anno:"+S.storeKey, JSON.stringify(
       { selMonths:S.selMonths, cw:S.cw, ch:S.ch, preset:S.preset, perRow:S.perRow, title:S.title,
         lock:S.lock, snap:S.snap, placed:S.placed, widths:S.widths, arrow:S.arrow,
-        monthPos:S.monthPos, monthMoved:S.monthMoved, userPlaced:S.userPlaced, known:S.known })); }catch(e){} }
+        monthPos:S.monthPos, monthMoved:S.monthMoved, colorOverride:S.colorOverride, extraArrows:S.extraArrows,
+        userPlaced:S.userPlaced, known:S.known })); }catch(e){} }
   function load(){ try{
       var raw=localStorage.getItem("tt-anno:"+S.storeKey); if(!raw) return; var d=JSON.parse(raw)||{};
-      ["selMonths","cw","ch","preset","perRow","title","lock","snap","placed","widths","arrow","monthPos","monthMoved","userPlaced","known"]
+      ["selMonths","cw","ch","preset","perRow","title","lock","snap","placed","widths","arrow","monthPos","monthMoved","colorOverride","extraArrows","userPlaced","known"]
         .forEach(function(k){ if(d[k]!==undefined && d[k]!==null) S[k]=d[k]; });
     }catch(e){} }
 
@@ -125,7 +139,8 @@
     cg.appendChild(cs); cg.appendChild(wi); cg.appendChild(document.createTextNode(" × ")); cg.appendChild(hi); b.appendChild(cg);
     // actions
     var ag=el("span","an-grp");
-    var tidy=el("button","an-btn"); tidy.textContent="Tidy"; tidy.title="Auto-arrange the labels"; tidy.onclick=function(){ layoutDefaults(true); persist(); }; ag.appendChild(tidy);
+    var undoB=el("button","an-btn"); undoB.textContent="↩ Undo"; undoB.title="Undo the last design change"; undoB.onclick=undo; ag.appendChild(undoB);
+    var tidy=el("button","an-btn"); tidy.textContent="Tidy"; tidy.title="Auto-arrange the labels"; tidy.onclick=function(){ pushUndo(); layoutDefaults(true); persist(); }; ag.appendChild(tidy);
     var reset=el("button","an-btn"); reset.textContent="Reset"; reset.title="Clear all manual arranging (labels and month positions)"; reset.onclick=function(){ S.placed={}; S.widths={}; S.arrow={}; S.userPlaced={}; S.monthPos={}; S.monthMoved={}; persist(); render(); }; ag.appendChild(reset);
     b.appendChild(ag);
     // toggles
@@ -133,9 +148,10 @@
     lkc.onchange=function(){ S.lock=lkc.checked; persist(); render(); }; lk.appendChild(lkc); lk.appendChild(document.createTextNode("🔒 Lock dates")); b.appendChild(lk);
     var sn=el("label","an-mo"); var snc=el("input"); snc.type="checkbox"; snc.checked=S.snap;
     snc.onchange=function(){ S.snap=snc.checked; persist(); }; sn.appendChild(snc); sn.appendChild(document.createTextNode("Snap")); b.appendChild(sn);
-    // copy
+    // copy + save
     var cp=el("button","an-btn"); cp.textContent="⧉ Copy"; cp.title="Copy the board to the clipboard"; cp.onclick=copyToClipboard; b.appendChild(cp);
-    var hint=el("span","an-hint"); hint.textContent="Drag a month's header to move it · drag the canvas edges to resize · drag a coloured run to reschedule."; b.appendChild(hint);
+    var sv=el("button","an-btn an-btn-primary"); sv.textContent="💾 Save"; sv.title="Save this annotated design into the workbook"; sv.onclick=doSave; b.appendChild(sv);
+    var hint=el("span","an-hint"); hint.textContent="Right-click a card to rename / recolour · drag on empty space to select several · drag a month header or the canvas edges."; b.appendChild(hint);
   }
   function el(tag,cls){ var e=document.createElement(tag); if(cls) e.className=cls; return e; }
   function add(p,tag,txt){ var e=el(tag); e.textContent=txt; if(tag==="strong") e.style.fontSize="12.5px"; p.appendChild(e); return e; }
@@ -247,8 +263,8 @@
     var hdr=wrap.querySelector(".an-mhdr"); if(!hdr) return; hdr.style.cursor="move";
     hdr.addEventListener("mousedown", function(e){
       e.preventDefault(); e.stopPropagation(); var br=S.board.getBoundingClientRect();
-      var dx=e.clientX-wrap.getBoundingClientRect().left, dy=e.clientY-wrap.getBoundingClientRect().top;
-      function move(ev){ var x=Math.max(0, ev.clientX-br.left-dx), y=Math.max(0, ev.clientY-br.top-dy);
+      var dx=e.clientX-wrap.getBoundingClientRect().left, dy=e.clientY-wrap.getBoundingClientRect().top, pushed=false;
+      function move(ev){ if(!pushed){pushUndo();pushed=true;} var x=Math.max(0, ev.clientX-br.left-dx), y=Math.max(0, ev.clientY-br.top-dy);
         wrap.style.left=x+"px"; wrap.style.top=y+"px"; S.monthPos[key]={x:x,y:y}; S.monthMoved[key]=1; drawArrows(); }
       function up(){ persist(); try{ layoutDefaults(false); }catch(e){} document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up); }
       document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
@@ -256,8 +272,8 @@
   }
   function makeCanvasResize(h, edge){
     h.addEventListener("mousedown", function(e){
-      e.preventDefault(); e.stopPropagation(); var br=S.board.getBoundingClientRect();
-      function move(ev){
+      e.preventDefault(); e.stopPropagation(); var br=S.board.getBoundingClientRect(), pushed=false;
+      function move(ev){ if(!pushed){pushUndo();pushed=true;}
         if(edge==="r"||edge==="br") S.cw=Math.max(500, Math.round(ev.clientX-br.left));
         if(edge==="b"||edge==="br") S.ch=Math.max(360, Math.round(ev.clientY-br.top));
         S.board.style.width=S.cw+"px"; S.board.style.height=S.ch+"px";
@@ -340,7 +356,7 @@
         var k=Math.min(hw/(Math.abs(vx)||1e6),hh/(Math.abs(vy)||1e6)), ul=Math.hypot(vx,vy)||1;
         tip={x:cc.x+vx*k+(vx/ul), y:cc.y+vy*k+(vy/ul)}; }
       var wp=s.wp||{x:(start.x+tip.x)/2,y:(start.y+tip.y)/2};
-      var sw = (t.id===S.sel)?3.5:2.5;
+      var sw = S.selSet[t.id]?3.5:2.5;
       var ang=Math.atan2(tip.y-wp.y,tip.x-wp.x), ah=8;
       var p1x=tip.x-ah*Math.cos(ang-0.42),p1y=tip.y-ah*Math.sin(ang-0.42);
       var p2x=tip.x-ah*Math.cos(ang+0.42),p2y=tip.y-ah*Math.sin(ang+0.42);
@@ -355,17 +371,23 @@
   }
 
   /* ---------------- selection (progressive disclosure) ---------------- */
+  function selCount(){ return Object.keys(S.selSet).length; }
+  function selOne(){ return selCount()===1 ? Object.keys(S.selSet)[0] : null; }
   function applySelection(){
-    var c=S.ctx; if(!c) return;
+    var c=S.ctx; if(!c) return; var one=selOne();
     c.tasks.forEach(function(t){
-      var on = t.id===S.sel, H=c.handles[t.id];
-      H.s.style.display=H.w.style.display=H.e.style.display = on?"block":"none";
-      c.labels[t.id].classList.toggle("an-sel", on);
+      var H=c.handles[t.id], showH=(t.id===one);
+      H.s.style.display=H.w.style.display=H.e.style.display = showH?"block":"none";
+      c.labels[t.id].classList.toggle("an-sel", !!S.selSet[t.id]);
     });
     drawArrows();
   }
-  function selectLabel(id){ S.sel=id; applySelection(); }
-  function clearSel(){ if(S.sel!==null){ S.sel=null; applySelection(); } }
+  function selectLabel(id, additive){
+    if(additive){ if(S.selSet[id]) delete S.selSet[id]; else S.selSet[id]=1; }
+    else { S.selSet={}; S.selSet[id]=1; }
+    S.sel=id; applySelection();
+  }
+  function clearSel(){ if(selCount()){ S.selSet={}; S.sel=null; applySelection(); } }
 
   /* ---------------- snapping ---------------- */
   function snapXY(x,y,selfId){
@@ -380,8 +402,8 @@
     var h=el("div","an-handle"+(type==="wp"?" wp":type==="end"?" end":"")); h.style.display="none";
     h.style.borderColor=color; if(type!=="wp") h.style.background=color;
     h.addEventListener("mousedown",function(e){
-      e.preventDefault(); e.stopPropagation(); var b=S.board.getBoundingClientRect();
-      function move(ev){ var px=ev.clientX-b.left, py=ev.clientY-b.top;
+      e.preventDefault(); e.stopPropagation(); var b=S.board.getBoundingClientRect(), pushed=false;
+      function move(ev){ if(!pushed){pushUndo();pushed=true;} var px=ev.clientX-b.left, py=ev.clientY-b.top;
         if(type==="wp") ast(id).wp={x:px,y:py};
         else if(type==="end"){
           if(S.snap){ var best=null,bd=14; S.board.querySelectorAll(".an-cell[data-date]").forEach(function(cel){ var r=cel.getBoundingClientRect(); var cx=r.left+r.width/2-b.left, cy=r.top+r.height/2-b.top; var d=Math.hypot(cx-px,cy-py); if(d<bd){bd=d;best={x:cx,y:cy};} }); if(best){px=best.x;py=best.y;} }
@@ -396,8 +418,8 @@
 
   function makeResize(g,lab,id){
     g.addEventListener("mousedown",function(e){
-      e.preventDefault(); e.stopPropagation(); var startX=e.clientX, startW=lab.offsetWidth;
-      function move(ev){ var w=Math.max(90,Math.min(600,startW+(ev.clientX-startX)));
+      e.preventDefault(); e.stopPropagation(); var startX=e.clientX, startW=lab.offsetWidth, pushed=false;
+      function move(ev){ if(!pushed){pushUndo();pushed=true;} var w=Math.max(90,Math.min(600,startW+(ev.clientX-startX)));
         lab.style.width=w+"px"; lab.style.maxWidth="none"; S.widths[id]=w; drawArrows(); }
       function up(){ persist(); document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up); }
       document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
@@ -405,19 +427,66 @@
   }
 
   function makeLabelDrag(lab,id){
+    lab.addEventListener("contextmenu", function(e){ e.preventDefault(); e.stopPropagation(); openEditor(id, e.clientX, e.clientY); });
     lab.addEventListener("mousedown",function(e){
-      if(e.target.classList.contains("an-rsz")) return;
-      e.preventDefault(); var b=S.board.getBoundingClientRect();
-      var dx=e.clientX-lab.getBoundingClientRect().left, dy=e.clientY-lab.getBoundingClientRect().top, moved=false;
-      function move(ev){ moved=true; lab.classList.add("drag"); lab.classList.remove("an-new");
-        var sp=snapXY(Math.max(4,ev.clientX-b.left-dx), Math.max(4,ev.clientY-b.top-dy), id);
-        lab.style.left=sp.x+"px"; lab.style.top=sp.y+"px"; S.placed[id]={x:sp.x,y:sp.y}; S.userPlaced[id]=1; drawArrows(); }
+      if(e.button!==0 || e.target.classList.contains("an-rsz")) return;
+      e.preventDefault();
+      // move all selected together if this label is part of a multi-selection
+      var group = (S.selSet[id] && selCount()>1) ? Object.keys(S.selSet) : [id];
+      var starts={}; group.forEach(function(g){ var l=S.ctx.labels[g]; var p=S.placed[g]||{x:parseFloat(l.style.left)||0,y:parseFloat(l.style.top)||0}; starts[g]={x:p.x,y:p.y}; });
+      var ox=e.clientX, oy=e.clientY, moved=false;
+      function move(ev){ if(!moved){ pushUndo(); moved=true; lab.classList.add("drag"); }
+        var ddx=ev.clientX-ox, ddy=ev.clientY-oy;
+        group.forEach(function(g){ var nx=Math.max(4,starts[g].x+ddx), ny=Math.max(4,starts[g].y+ddy);
+          if(group.length===1){ var sp=snapXY(nx,ny,g); nx=sp.x; ny=sp.y; }
+          var el=S.ctx.labels[g]; if(el){ el.style.left=nx+"px"; el.style.top=ny+"px"; el.classList.remove("an-new"); }
+          S.placed[g]={x:nx,y:ny}; S.userPlaced[g]=1; });
+        drawArrows(); }
       function up(){ lab.classList.remove("drag");
-        if(moved) persist(); else selectLabel(id);         // click (no move) selects; drag arranges
+        if(moved) persist(); else selectLabel(id, e.shiftKey);   // click selects (shift = add); drag arranges
         document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up); }
       document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
     });
   }
+
+  /* ---- right-click editor: rename + recolour ---- */
+  function openEditor(id, cx, cy){
+    closeEditor(); var t=byId(id); if(!t) return;
+    var cur=(colorMap(S.items)[id]||"#2e86c1"); if(cur.length!==7) cur="#2e86c1";
+    var pop=el("div","an-editor");
+    pop.innerHTML='<label class="an-ed-l">Name</label><input class="an-ed-name" type="text">'+
+      '<div class="an-ed-row"><label class="an-ed-l">Colour</label><input class="an-ed-color" type="color"></div>'+
+      '<div class="an-ed-btns"><button class="an-btn an-ed-del" data-a="del">Delete</button><span style="flex:1"></span>'+
+      '<button class="an-btn" data-a="cancel">Cancel</button><button class="an-btn an-ed-save" data-a="save">Save</button></div>';
+    document.body.appendChild(pop);
+    var nameI=pop.querySelector(".an-ed-name"); nameI.value=t.name||"";
+    var colI=pop.querySelector(".an-ed-color"); colI.value=cur;
+    pop.style.left=Math.min(cx, window.innerWidth-pop.offsetWidth-12)+"px";
+    pop.style.top=Math.min(cy, window.innerHeight-pop.offsetHeight-12)+"px";
+    nameI.focus(); nameI.select();
+    function commit(){
+      var nn=nameI.value, nc=colI.value.toLowerCase();
+      if(nn!==(t.name||"") && S.opts.onRename) S.opts.onRename(id, nn);
+      if(nc!==cur){ pushUndo(); S.colorOverride[id]=nc; if(S.opts.onColor) S.opts.onColor(id, nc); persist(); render(); }
+      closeEditor();
+    }
+    pop.addEventListener("mousedown", function(e){ e.stopPropagation(); });
+    pop.addEventListener("click", function(e){ var a=e.target.getAttribute&&e.target.getAttribute("data-a"); if(!a) return;
+      if(a==="save") commit(); else if(a==="cancel") closeEditor();
+      else if(a==="del"){ closeEditor(); if(S.opts.onDelete) S.opts.onDelete(id); } });
+    nameI.addEventListener("keydown", function(e){ if(e.key==="Enter"){e.preventDefault();commit();} else if(e.key==="Escape"){e.preventDefault();closeEditor();} });
+    S._editor=pop; setTimeout(function(){ document.addEventListener("mousedown", outsideEditor, true); },0);
+  }
+  function outsideEditor(e){ if(S._editor && !S._editor.contains(e.target)) closeEditor(); }
+  function closeEditor(){ document.removeEventListener("mousedown", outsideEditor, true); if(S._editor){ S._editor.remove(); S._editor=null; } }
+
+  /* ---- save the design into the workbook (host persists it) ---- */
+  function doSave(){ persist(); if(S.opts.onSaveDesign){ S.opts.onSaveDesign(localStorage.getItem("tt-anno:"+S.storeKey)||"{}"); } else toast("Saved locally"); }
+  function applyDesign(jsonStr){ try{ var d=JSON.parse(jsonStr)||{};
+      ["selMonths","cw","ch","preset","perRow","title","lock","snap","placed","widths","arrow","monthPos","monthMoved","colorOverride","extraArrows","userPlaced","known"]
+        .forEach(function(k){ if(d[k]!==undefined && d[k]!==null) S[k]=d[k]; });
+      persist(); buildBar(monthsAvail(S.items)); render();
+    }catch(e){} }
 
   /* ---------------- reschedule (writes to Excel) ---------------- */
   var _tip=null;
@@ -474,9 +543,25 @@
         document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
       });
     });
-    // click on empty board clears the selection
-    if(!board._anDeselect){ board._anDeselect=true;
-      board.addEventListener("mousedown",function(e){ if(e.target.closest(".an-lbl")||e.target.closest(".an-handle")) return; clearSel(); }); }
+    // drag on empty canvas = rubber-band multi-select; a plain click clears
+    if(!board._anRubber){ board._anRubber=true;
+      board.addEventListener("mousedown", function(e){
+        if(e.button!==0) return;
+        if(e.target.closest(".an-lbl")||e.target.closest(".an-handle")||e.target.closest(".an-mhdr")||e.target.closest(".an-edge")||e.target.closest(".an-cell.tinted")) return;
+        var br=board.getBoundingClientRect(), ox=e.clientX, oy=e.clientY, rect=null, dragged=false;
+        function move(ev){ if(!dragged && Math.abs(ev.clientX-ox)+Math.abs(ev.clientY-oy)<4) return; dragged=true;
+          if(!rect){ rect=el("div","an-rubber"); board.appendChild(rect); }
+          rect.style.left=(Math.min(ox,ev.clientX)-br.left)+"px"; rect.style.top=(Math.min(oy,ev.clientY)-br.top)+"px";
+          rect.style.width=Math.abs(ev.clientX-ox)+"px"; rect.style.height=Math.abs(ev.clientY-oy)+"px"; }
+        function up(){ document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up);
+          if(dragged && rect){ var rr=rect.getBoundingClientRect(); S.selSet={};
+            S.ctx.tasks.forEach(function(t){ var lr=S.ctx.labels[t.id].getBoundingClientRect();
+              if(lr.left<rr.right&&rr.left<lr.right&&lr.top<rr.bottom&&rr.top<lr.bottom) S.selSet[t.id]=1; });
+            S.sel=selOne(); applySelection(); }
+          else clearSel();
+          if(rect) rect.remove(); }
+        document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
+      }); }
   }
 
   /* ---------------- export ---------------- */
@@ -496,5 +581,5 @@
   }
 
   global.Annotated = { mount:mount, update:update, render:render, exportCanvas:exportCanvas,
-                       isMounted:function(){ return S.mounted; } };
+                       applyDesign:applyDesign, undo:undo, isMounted:function(){ return S.mounted; } };
 })(window);

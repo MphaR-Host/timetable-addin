@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Timetable — big view</title>
-<link rel="stylesheet" href="styles.css?v=5">
+<link rel="stylesheet" href="styles.css?v=6">
 <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 <script src="html2canvas.min.js"></script>
 <style>
@@ -81,8 +81,8 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="calendar.js?v=5"></script>
-<script src="annotated.js?v=5"></script>
+<script src="calendar.js?v=6"></script>
+<script src="annotated.js?v=6"></script>
 <script>
 /* The dialog cannot reach the Excel object model, so it asks the task pane to
    act on its behalf and receives the data back the same way. */
@@ -113,14 +113,20 @@
   }
 
   /* Switch between the calendar view and the annotated (slide) view. */
+  var savedDesign = null, designApplied = false;
   function ensureAnnoMounted(){
-    if (Annotated.isMounted()) return;
+    if (Annotated.isMounted()) { if (savedDesign && !designApplied) { Annotated.applyDesign(savedDesign); designApplied = true; } return; }
     Annotated.mount($("annoBoard"), $("annoBar"), {
       storeKey: ($("ttl").textContent || "timetable"),
       canResize: function(){ return available.indexOf("end") >= 0; },
       onToast: function(m){ toast(m); },
-      onEdit: function(id, start, end){ send({ op:"setdates", id:id, start:start, end:end }); toast("Updating Excel…"); }
+      onEdit: function(id, start, end){ send({ op:"setdates", id:id, start:start, end:end }); toast("Updating Excel…"); },
+      onRename: function(id, name){ send({ op:"update", id:id, field:"name", value:name }); toast("Updating Excel…"); },
+      onColor: function(id, color){ send({ op:"update", id:id, field:"color", value:color }); },
+      onDelete: function(id){ send({ op:"delete", id:id }); toast("Removing…"); },
+      onSaveDesign: function(json){ send({ op:"savedesign", key:($("ttl").textContent||"timetable"), json:json }); toast("Saving design…"); }
     });
+    if (savedDesign && !designApplied) { Annotated.applyDesign(savedDesign); designApplied = true; }
   }
   function setView(v){
     view = v;
@@ -292,10 +298,13 @@
           hidden = m.hidden || [];
           available = m.available || available;
           if (m.title) { $("ttl").textContent = m.title; document.title = m.title; }
+          if (m.design !== undefined && m.design !== null) savedDesign = m.design;
           if (!ready && m.density) { $("density").value = m.density; }
           if (!ready) { $("showDates").checked = !!m.showDates; ready = true; }
+          if (view === "anno" && Annotated.isMounted() && savedDesign && !designApplied) { Annotated.applyDesign(savedDesign); designApplied = true; }
           draw();
         }
+        if (m.op === "toast") { toast(m.msg || ""); }
       },
       function () { send({ op: "ready" }); });
 
