@@ -17,6 +17,23 @@
   var CW = 46, CH = 34;
   var HDR = {0:"#c47fb0",1:"#5aa0d6",2:"#7fb069",3:"#e0a13c",4:"#5aa0d6",5:"#7fb069",6:"#5aa0d6",7:"#d9736b",8:"#e0b93c",9:"#7fb069",10:"#b08bd6",11:"#5aa0d6"};
   var PALETTE = ["#2e86c1","#e67e22","#27ae60","#8e44ad","#c0392b","#16a085","#d4ac0d","#34495e","#d81b83","#2980b9","#af601a","#1abc9c"];
+  // A wider, well-spaced palette used to disambiguate tasks that arrive with the
+  // same colour (e.g. a sheet with no Colour column, where the host assigns a
+  // small repeating palette by row) so every task in the view is distinct.
+  var DISTINCT = ["#2e86c1","#e67e22","#27ae60","#8e44ad","#c0392b","#16a085","#d4ac0d","#34495e","#d81b83","#2980b9",
+                  "#af601a","#1abc9c","#7f8c8d","#c0398b","#0e6655","#b7950b","#6c3483","#1f618d","#a04000","#117864"];
+  /* colour per task id: keep each incoming colour when unique, otherwise take the
+     next unused DISTINCT colour, so no two visible tasks share a fill. */
+  function colorMap(items){
+    var map={}, used={}, di=0;
+    items.forEach(function(t){
+      var c=(t.color||"").toLowerCase();
+      if(!c || used[c]){ while(used[DISTINCT[di%DISTINCT.length].toLowerCase()] && di<DISTINCT.length*3) di++;
+        c=DISTINCT[di%DISTINCT.length].toLowerCase(); di++; }
+      used[c]=1; map[t.id]=c;
+    });
+    return map;
+  }
   var PRESETS = { "16:9":[1600,900], "A4":[1754,1240] };
 
   function parse(s){ if(!s) return null; var p=String(s).split("-").map(Number); if(!p[0]) return null; return new Date(p[0],p[1]-1,p[2]); }
@@ -139,7 +156,7 @@
 
     var avail=monthsAvail(S.items);
     var shown=avail.filter(function(m){ return S.selMonths[m.k]; });
-    var idColor={}; S.items.forEach(function(t,i){ idColor[t.id]=colr(t,i); });
+    var idColor=colorMap(S.items);
     var tISO=todayISO();
 
     var taskCells={}, taskWrap={};
@@ -217,21 +234,41 @@
     var c=S.ctx; if(!c) return; var b=S.board.getBoundingClientRect();
     // gutters are measured from the actual month blocks, not the full-width row
     var months=S.board.querySelectorAll(".an-month"); if(!months.length) return;
-    var rowL=1e9, rowR=0, rowTop=1e9;
+    var rowL=1e9, rowR=0, rowTop=1e9, rowBot=0;
+    // The calendars themselves are obstacles — labels must never sit on top of them.
+    var occ=[];
     months.forEach(function(m){ var r=m.getBoundingClientRect();
-      rowL=Math.min(rowL,r.left-b.left); rowR=Math.max(rowR,r.right-b.left); rowTop=Math.min(rowTop,r.top-b.top); });
+      var mr={x:r.left-b.left,y:r.top-b.top,w:r.width,h:r.height};
+      rowL=Math.min(rowL,mr.x); rowR=Math.max(rowR,mr.x+mr.w); rowTop=Math.min(rowTop,mr.y); rowBot=Math.max(rowBot,mr.y+mr.h);
+      occ.push(mr); });
     rowTop=Math.max(rowTop,40);
-    var leftY=rowTop, rightY=rowTop;
+    // Labels the user dragged stay put and act as obstacles. Auto-placed labels
+    // are re-flowed every layout change (deterministically) so they never go
+    // stale when the canvas resizes, months toggle, or the sheet refreshes.
+    if(!force) c.tasks.forEach(function(t){ if(!S.userPlaced[t.id]) return; var p=S.placed[t.id]; if(!p) return;
+      var lab=c.labels[t.id]; lab.style.left=p.x+"px"; lab.style.top=p.y+"px";
+      occ.push({x:p.x,y:p.y,w:lab.offsetWidth||220,h:lab.offsetHeight||40}); });
+    function freeY(x,lw,lh,y0){                     // first y (top-down from y0) clear of every obstacle at this x
+      var y=y0, guard=0;
+      function hit(){ return occ.filter(function(o){ return x<o.x+o.w+10 && o.x<x+lw+10 && y<o.y+o.h+8 && o.y<y+lh+8; }); }
+      var h=hit();
+      while(h.length && guard++<300){ var nb=y+lh+12; h.forEach(function(o){ nb=Math.max(nb,o.y+o.h+12); }); y=nb; h=hit(); }
+      return y;
+    }
     c.tasks.slice().sort(function(a,bb){
       var ca=centreOf(c.labels[a.id]._anchor,b), cb=centreOf(c.labels[bb.id]._anchor,b);
       return ca.y-cb.y || ca.x-cb.x;
     }).forEach(function(t){
-      var lab=c.labels[t.id]; if(!force && S.placed[t.id]) return;
+      var lab=c.labels[t.id]; if(!force && S.userPlaced[t.id]) return;
       var lw=lab.offsetWidth||220, lh=lab.offsetHeight||40, cc=centreOf(lab._anchor,b);
-      var left = cc.x < S.cw/2, x, y;
-      if(left){ x=Math.max(8, rowL-lw-32); y=leftY; leftY+=lh+12; }
-      else    { x=Math.min(S.cw-lw-8, rowR+32); y=rightY; rightY+=lh+12; }
+      var leftRoom = (rowL-8) >= (lw+32), rightRoom = (S.cw-8) >= (rowR+32+lw);
+      var left = cc.x < S.cw/2, x, y0=rowTop;
+      if(left && leftRoom) x=rowL-lw-32;             // clean left gutter
+      else if(!left && rightRoom) x=rowR+32;         // clean right gutter
+      else { x=Math.max(8, Math.min(S.cw-lw-8, cc.x-lw/2)); y0=rowBot+16; }  // no side room -> below its month
+      var y = freeY(x,lw,lh,y0);
       lab.style.left=x+"px"; lab.style.top=y+"px"; S.placed[t.id]={x:x,y:y};
+      occ.push({x:x,y:y,w:lw,h:lh});
     });
     drawArrows();
   }
