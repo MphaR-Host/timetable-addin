@@ -205,6 +205,10 @@ select,input[type=text],input[type=date]{border:1px solid var(--line);border-rad
 /* rubber-band multi-select rectangle */
 .an-rubber{position:absolute;z-index:5;border:1.5px dashed var(--sel);background:rgba(52,152,219,.12);pointer-events:none;}
 .an-board.an-exporting .an-rubber{display:none;}
+/* selected month block (multi-select) */
+.an-month.an-msel{outline:2px solid var(--sel);outline-offset:3px;border-radius:6px;}
+.an-board.an-exporting .an-month.an-msel{outline:none;}
+.an-board.an-exporting .an-lbl.an-sel{box-shadow:0 3px 10px rgba(0,0,0,.2);}
 .an-tip{position:fixed;z-index:130;background:#22303f;color:#fff;font-size:12px;font-weight:600;padding:4px 8px;border-radius:5px;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,.28);}
 
 /* ---- modal ---- */

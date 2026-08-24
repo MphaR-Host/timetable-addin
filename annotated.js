@@ -57,7 +57,7 @@
             placed:{}, widths:{}, arrow:{}, selMonths:null, cw:1500, ch:950,
             preset:"custom", perRow:"auto", title:"", lock:false, snap:true,
             monthPos:{}, monthMoved:{}, colorOverride:{}, extraArrows:{},
-            userPlaced:{}, known:null, sel:null, selSet:{}, undo:[], ctx:null };
+            userPlaced:{}, known:null, sel:null, selSet:{}, monthSel:{}, undo:[], ctx:null };
   function ast(id){ return S.arrow[id]||(S.arrow[id]={startOff:null,wp:null,end:null}); }
   function extras(id){ return S.extraArrows[id]||(S.extraArrows[id]=[]); }
   function arrowsOf(id){ return [ast(id)].concat(S.extraArrows[id]||[]); }   // [main, ...extras]
@@ -263,11 +263,14 @@
   function makeMonthDrag(wrap, key){
     var hdr=wrap.querySelector(".an-mhdr"); if(!hdr) return; hdr.style.cursor="move";
     hdr.addEventListener("mousedown", function(e){
-      e.preventDefault(); e.stopPropagation(); var br=S.board.getBoundingClientRect();
-      var dx=e.clientX-wrap.getBoundingClientRect().left, dy=e.clientY-wrap.getBoundingClientRect().top, pushed=false;
-      function move(ev){ if(!pushed){pushUndo();pushed=true;} var x=Math.max(0, ev.clientX-br.left-dx), y=Math.max(0, ev.clientY-br.top-dy);
-        wrap.style.left=x+"px"; wrap.style.top=y+"px"; S.monthPos[key]={x:x,y:y}; S.monthMoved[key]=1; drawArrows(); }
-      function up(){ persist(); try{ layoutDefaults(false); }catch(e){} document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up); }
+      if(e.button!==0) return;
+      e.preventDefault(); e.stopPropagation();
+      var group=buildGroup("month", key), ox=e.clientX, oy=e.clientY, moved=false;
+      function move(ev){ if(!moved){ pushUndo(); moved=true; } applyGroupMove(group, ev.clientX-ox, ev.clientY-oy); }
+      function up(){
+        if(moved){ persist(); if(group.months.length===1 && !group.labels.length){ try{ layoutDefaults(false); }catch(e){} } }
+        else selectMonth(key, e.shiftKey);   // click a month header selects it (shift = add)
+        document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up); }
       document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
     });
   }
@@ -375,10 +378,12 @@
 
   /* ---------------- selection (progressive disclosure) ---------------- */
   function selCount(){ return Object.keys(S.selSet).length; }
-  function selOne(){ return selCount()===1 ? Object.keys(S.selSet)[0] : null; }
+  function monthSelCount(){ return Object.keys(S.monthSel).length; }
+  function selOne(){ return (selCount()===1 && !monthSelCount()) ? Object.keys(S.selSet)[0] : null; }
   function applySelection(){
     var c=S.ctx; if(!c) return;
     c.tasks.forEach(function(t){ c.labels[t.id].classList.toggle("an-sel", !!S.selSet[t.id]); });
+    S.board.querySelectorAll(".an-month").forEach(function(w){ w.classList.toggle("an-msel", !!S.monthSel[w.dataset.mk]); });
     renderHandles();
     drawArrows();
   }
@@ -396,10 +401,38 @@
   }
   function selectLabel(id, additive){
     if(additive){ if(S.selSet[id]) delete S.selSet[id]; else S.selSet[id]=1; }
-    else { S.selSet={}; S.selSet[id]=1; }
+    else { S.selSet={}; S.monthSel={}; S.selSet[id]=1; }
     S.sel=id; applySelection();
   }
-  function clearSel(){ if(selCount()){ S.selSet={}; S.sel=null; applySelection(); } }
+  function selectMonth(key, additive){
+    if(additive){ if(S.monthSel[key]) delete S.monthSel[key]; else S.monthSel[key]=1; }
+    else { S.selSet={}; S.monthSel={}; S.monthSel[key]=1; }
+    S.sel=null; applySelection();
+  }
+  function clearSel(){ if(selCount()||monthSelCount()){ S.selSet={}; S.monthSel={}; S.sel=null; applySelection(); } }
+
+  /* ---- shared group move (labels + month blocks together) ---- */
+  function monthEl(k){ return S.board.querySelector('.an-month[data-mk="'+k+'"]'); }
+  function buildGroup(kind, id){
+    var multi=(selCount()+monthSelCount())>1;
+    var inSel = kind==="label" ? !!S.selSet[id] : !!S.monthSel[id];
+    var labels=[], months=[];
+    if(multi && inSel){ labels=Object.keys(S.selSet); months=Object.keys(S.monthSel); }
+    else if(kind==="label") labels=[id]; else months=[id];
+    var sL={}, sM={};
+    labels.forEach(function(g){ var l=S.ctx.labels[g]; var p=S.placed[g]||{x:parseFloat(l.style.left)||0,y:parseFloat(l.style.top)||0}; sL[g]={x:p.x,y:p.y}; });
+    months.forEach(function(k){ var p=S.monthPos[k]||{x:0,y:0}; sM[k]={x:p.x,y:p.y}; });
+    return { labels:labels, months:months, sL:sL, sM:sM, single:(labels.length===1&&!months.length) };
+  }
+  function applyGroupMove(group, ddx, ddy){
+    group.labels.forEach(function(g){ var nx=Math.max(4,group.sL[g].x+ddx), ny=Math.max(4,group.sL[g].y+ddy);
+      if(group.single){ var sp=snapXY(nx,ny,g); nx=sp.x; ny=sp.y; }
+      var el=S.ctx.labels[g]; if(el){ el.style.left=nx+"px"; el.style.top=ny+"px"; el.classList.remove("an-new"); }
+      S.placed[g]={x:nx,y:ny}; S.userPlaced[g]=1; });
+    group.months.forEach(function(k){ var nx=Math.max(0,group.sM[k].x+ddx), ny=Math.max(0,group.sM[k].y+ddy);
+      var w=monthEl(k); if(w){ w.style.left=nx+"px"; w.style.top=ny+"px"; } S.monthPos[k]={x:nx,y:ny}; S.monthMoved[k]=1; });
+    drawArrows();
+  }
 
   /* ---------------- snapping ---------------- */
   function snapXY(x,y,selfId){
@@ -454,17 +487,9 @@
     lab.addEventListener("mousedown",function(e){
       if(e.button!==0 || e.target.classList.contains("an-rsz")) return;
       e.preventDefault();
-      // move all selected together if this label is part of a multi-selection
-      var group = (S.selSet[id] && selCount()>1) ? Object.keys(S.selSet) : [id];
-      var starts={}; group.forEach(function(g){ var l=S.ctx.labels[g]; var p=S.placed[g]||{x:parseFloat(l.style.left)||0,y:parseFloat(l.style.top)||0}; starts[g]={x:p.x,y:p.y}; });
-      var ox=e.clientX, oy=e.clientY, moved=false;
+      var group=buildGroup("label", id), ox=e.clientX, oy=e.clientY, moved=false;
       function move(ev){ if(!moved){ pushUndo(); moved=true; lab.classList.add("drag"); }
-        var ddx=ev.clientX-ox, ddy=ev.clientY-oy;
-        group.forEach(function(g){ var nx=Math.max(4,starts[g].x+ddx), ny=Math.max(4,starts[g].y+ddy);
-          if(group.length===1){ var sp=snapXY(nx,ny,g); nx=sp.x; ny=sp.y; }
-          var el=S.ctx.labels[g]; if(el){ el.style.left=nx+"px"; el.style.top=ny+"px"; el.classList.remove("an-new"); }
-          S.placed[g]={x:nx,y:ny}; S.userPlaced[g]=1; });
-        drawArrows(); }
+        applyGroupMove(group, ev.clientX-ox, ev.clientY-oy); }
       function up(){ lab.classList.remove("drag");
         if(moved) persist(); else selectLabel(id, e.shiftKey);   // click selects (shift = add); drag arranges
         document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up); }
@@ -578,9 +603,11 @@
           rect.style.left=(Math.min(ox,ev.clientX)-br.left)+"px"; rect.style.top=(Math.min(oy,ev.clientY)-br.top)+"px";
           rect.style.width=Math.abs(ev.clientX-ox)+"px"; rect.style.height=Math.abs(ev.clientY-oy)+"px"; }
         function up(){ document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up);
-          if(dragged && rect){ var rr=rect.getBoundingClientRect(); S.selSet={};
+          if(dragged && rect){ var rr=rect.getBoundingClientRect(); S.selSet={}; S.monthSel={};
             S.ctx.tasks.forEach(function(t){ var lr=S.ctx.labels[t.id].getBoundingClientRect();
               if(lr.left<rr.right&&rr.left<lr.right&&lr.top<rr.bottom&&rr.top<lr.bottom) S.selSet[t.id]=1; });
+            S.board.querySelectorAll(".an-month").forEach(function(w){ var mr=w.getBoundingClientRect();
+              if(mr.left<rr.right&&rr.left<mr.right&&mr.top<rr.bottom&&rr.top<mr.bottom) S.monthSel[w.dataset.mk]=1; });
             S.sel=selOne(); applySelection(); }
           else clearSel();
           if(rect) rect.remove(); }
