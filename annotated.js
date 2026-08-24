@@ -54,17 +54,17 @@
   var S = { board:null, bar:null, items:[], opts:{}, mounted:false, storeKey:"default",
             placed:{}, widths:{}, arrow:{}, selMonths:null, cw:1500, ch:950,
             preset:"custom", perRow:"auto", title:"", lock:false, snap:true,
-            userPlaced:{}, known:null, sel:null, ctx:null };
+            monthPos:{}, monthMoved:{}, userPlaced:{}, known:null, sel:null, ctx:null };
   function ast(id){ return S.arrow[id]||(S.arrow[id]={startOff:null,wp:null,end:null}); }
   function toast(m){ if(S.opts.onToast) S.opts.onToast(m); }
 
   function persist(){ try{ localStorage.setItem("tt-anno:"+S.storeKey, JSON.stringify(
       { selMonths:S.selMonths, cw:S.cw, ch:S.ch, preset:S.preset, perRow:S.perRow, title:S.title,
         lock:S.lock, snap:S.snap, placed:S.placed, widths:S.widths, arrow:S.arrow,
-        userPlaced:S.userPlaced, known:S.known })); }catch(e){} }
+        monthPos:S.monthPos, monthMoved:S.monthMoved, userPlaced:S.userPlaced, known:S.known })); }catch(e){} }
   function load(){ try{
       var raw=localStorage.getItem("tt-anno:"+S.storeKey); if(!raw) return; var d=JSON.parse(raw)||{};
-      ["selMonths","cw","ch","preset","perRow","title","lock","snap","placed","widths","arrow","userPlaced","known"]
+      ["selMonths","cw","ch","preset","perRow","title","lock","snap","placed","widths","arrow","monthPos","monthMoved","userPlaced","known"]
         .forEach(function(k){ if(d[k]!==undefined && d[k]!==null) S[k]=d[k]; });
     }catch(e){} }
 
@@ -126,7 +126,7 @@
     // actions
     var ag=el("span","an-grp");
     var tidy=el("button","an-btn"); tidy.textContent="Tidy"; tidy.title="Auto-arrange the labels"; tidy.onclick=function(){ layoutDefaults(true); persist(); }; ag.appendChild(tidy);
-    var reset=el("button","an-btn"); reset.textContent="Reset"; reset.title="Clear all manual arranging"; reset.onclick=function(){ S.placed={}; S.widths={}; S.arrow={}; S.userPlaced={}; persist(); render(); }; ag.appendChild(reset);
+    var reset=el("button","an-btn"); reset.textContent="Reset"; reset.title="Clear all manual arranging (labels and month positions)"; reset.onclick=function(){ S.placed={}; S.widths={}; S.arrow={}; S.userPlaced={}; S.monthPos={}; S.monthMoved={}; persist(); render(); }; ag.appendChild(reset);
     b.appendChild(ag);
     // toggles
     var lk=el("label","an-mo"); var lkc=el("input"); lkc.type="checkbox"; lkc.checked=S.lock;
@@ -135,7 +135,7 @@
     snc.onchange=function(){ S.snap=snc.checked; persist(); }; sn.appendChild(snc); sn.appendChild(document.createTextNode("Snap")); b.appendChild(sn);
     // copy
     var cp=el("button","an-btn"); cp.textContent="⧉ Copy"; cp.title="Copy the board to the clipboard"; cp.onclick=copyToClipboard; b.appendChild(cp);
-    var hint=el("span","an-hint"); hint.textContent="Click a label to edit it · drag a coloured run to reschedule."; b.appendChild(hint);
+    var hint=el("span","an-hint"); hint.textContent="Drag a month's header to move it · drag the canvas edges to resize · drag a coloured run to reschedule."; b.appendChild(hint);
   }
   function el(tag,cls){ var e=document.createElement(tag); if(cls) e.className=cls; return e; }
   function add(p,tag,txt){ var e=el(tag); e.textContent=txt; if(tag==="strong") e.style.fontSize="12.5px"; p.appendChild(e); return e; }
@@ -150,18 +150,15 @@
     var titleH = 0;
     if(S.title){ var tt=el("div","an-title"); tt.textContent=S.title; board.appendChild(tt); titleH=44; }
 
-    var row=el("div","an-months-row"); row.style.top=(titleH?titleH+18:26)+"px";
-    if(S.perRow && S.perRow!=="auto"){ row.style.display="grid"; row.style.gridTemplateColumns="repeat("+S.perRow+",max-content)"; row.style.gap="26px 44px"; }
-    board.appendChild(row);
-
+    var titleTop = titleH ? titleH+18 : 26;
     var avail=monthsAvail(S.items);
     var shown=avail.filter(function(m){ return S.selMonths[m.k]; });
     var idColor=colorMap(S.items);
     var tISO=todayISO();
 
-    var taskCells={}, taskWrap={};
+    var taskCells={}, taskWrap={}, monthEls=[];
     shown.forEach(function(mm){
-      var wrap=el("div","an-month"); wrap.style.width=(7*CW+6*3)+"px";
+      var wrap=el("div","an-month"); wrap.dataset.mk=mm.k; wrap.style.position="absolute"; wrap.style.width=(7*CW+6*3)+"px";
       var hdr=el("div","an-mhdr"); hdr.style.background=HDR[mm.m]||"#4a6b8a"; hdr.textContent=MON[mm.m]+" "+mm.y; wrap.appendChild(hdr);
       var dow=el("div","an-dow"); DOW.forEach(function(d,i){var s=el("div");s.textContent=d; if(i>=5)s.style.color="#b3bcc7"; dow.appendChild(s);}); wrap.appendChild(dow);
       var grid=el("div","an-grid"); wrap.appendChild(grid);
@@ -195,8 +192,9 @@
         c.style.marginRight = rgt ? "-3px" : "";
         if(lft||rgt) c.style.zIndex="0";
       });
-      row.appendChild(wrap);
+      board.appendChild(wrap); monthEls.push({wrap:wrap,key:mm.k}); makeMonthDrag(wrap,mm.k);
     });
+    positionMonths(monthEls, titleTop);
 
     var svg=document.createElementNS("http://www.w3.org/2000/svg","svg"); svg.setAttribute("class","an-arrows"); board.appendChild(svg);
     svg.setAttribute("width",S.cw); svg.setAttribute("height",S.ch);
@@ -223,6 +221,51 @@
     layoutDefaults(false);        // place any not-yet-placed labels into the gutters
     applySelection();
     enableReschedule();
+
+    // Paint-style canvas resize grips on the right edge, bottom edge and corner.
+    ["r","b","br"].forEach(function(edge){ var h=el("div","an-edge an-edge-"+edge); board.appendChild(h); makeCanvasResize(h,edge); });
+  }
+
+  /* ---- month blocks: draggable by their header ---- */
+  function positionMonths(monthEls, titleTop){
+    var monthW = 7*CW+6*3;
+    var cols = (S.perRow && S.perRow!=="auto") ? Math.max(1,+S.perRow)
+             : Math.max(1, Math.floor((S.cw-24)/(monthW+44)));
+    cols = Math.max(1, Math.min(cols, monthEls.length||1));
+    var hs = monthEls.map(function(m){ return m.wrap.offsetHeight||260; });
+    var rowMax=[]; monthEls.forEach(function(m,i){ var r=Math.floor(i/cols); rowMax[r]=Math.max(rowMax[r]||0, hs[i]); });
+    var rowY=[], yy=titleTop; for(var r=0;r<rowMax.length;r++){ rowY[r]=yy; yy+=rowMax[r]+26; }
+    var gridW = cols*monthW+(cols-1)*44, startX=Math.max(12, Math.round((S.cw-gridW)/2));
+    monthEls.forEach(function(m,i){
+      if(S.monthMoved[m.key] && S.monthPos[m.key]){ m.wrap.style.left=S.monthPos[m.key].x+"px"; m.wrap.style.top=S.monthPos[m.key].y+"px"; }
+      else{ var col=i%cols, row=Math.floor(i/cols), x=startX+col*(monthW+44), y=rowY[row];
+        m.wrap.style.left=x+"px"; m.wrap.style.top=y+"px"; S.monthPos[m.key]={x:x,y:y}; }
+    });
+  }
+  function makeMonthDrag(wrap, key){
+    var hdr=wrap.querySelector(".an-mhdr"); if(!hdr) return; hdr.style.cursor="move";
+    hdr.addEventListener("mousedown", function(e){
+      e.preventDefault(); e.stopPropagation(); var br=S.board.getBoundingClientRect();
+      var dx=e.clientX-wrap.getBoundingClientRect().left, dy=e.clientY-wrap.getBoundingClientRect().top;
+      function move(ev){ var x=Math.max(0, ev.clientX-br.left-dx), y=Math.max(0, ev.clientY-br.top-dy);
+        wrap.style.left=x+"px"; wrap.style.top=y+"px"; S.monthPos[key]={x:x,y:y}; S.monthMoved[key]=1; drawArrows(); }
+      function up(){ persist(); try{ layoutDefaults(false); }catch(e){} document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up); }
+      document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
+    });
+  }
+  function makeCanvasResize(h, edge){
+    h.addEventListener("mousedown", function(e){
+      e.preventDefault(); e.stopPropagation(); var br=S.board.getBoundingClientRect();
+      function move(ev){
+        if(edge==="r"||edge==="br") S.cw=Math.max(500, Math.round(ev.clientX-br.left));
+        if(edge==="b"||edge==="br") S.ch=Math.max(360, Math.round(ev.clientY-br.top));
+        S.board.style.width=S.cw+"px"; S.board.style.height=S.ch+"px";
+        var svg=S.board.querySelector(".an-arrows"); if(svg){ svg.setAttribute("width",S.cw); svg.setAttribute("height",S.ch); }
+        S.preset="custom";
+      }
+      function up(){ persist(); buildBar(monthsAvail(S.items)); document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up); }
+      document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
+    });
   }
 
   function rectOf(e,b){ var r=e.getBoundingClientRect(); return {x:r.left-b.left,y:r.top-b.top,w:r.width,h:r.height}; }
