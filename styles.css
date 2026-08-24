@@ -165,9 +165,25 @@ select,input[type=text],input[type=date]{border:1px solid var(--line);border-rad
 .an-handle:hover{opacity:1;}
 .an-handle.wp{background:#fff;}
 .an-handle.end{border-radius:2px;transform:rotate(45deg);}
-.an-board.an-exporting .an-handle,.an-board.an-exporting .an-rsz{display:none;}
+.an-board.an-exporting .an-handle,.an-board.an-exporting .an-rsz{display:none!important;}
 /* while dragging a run to reschedule, let the hit-test reach the cells */
 .an-board.an-rescheduling .an-handle,.an-board.an-rescheduling .an-lbl{pointer-events:none;}
+/* optional title band */
+.an-title{position:absolute;top:14px;left:0;right:0;text-align:center;font-size:22px;font-weight:800;color:var(--accent);letter-spacing:-.01em;}
+/* single-day milestone marker (small diamond, top-right of the day cell) */
+.an-cell.an-mile::after{content:"";position:absolute;top:2px;right:2px;width:7px;height:7px;background:#fff;transform:rotate(45deg);box-shadow:0 0 0 1px rgba(0,0,0,.3);z-index:1;}
+/* today ring + weekend tint */
+.an-cell.an-today{box-shadow:inset 0 0 0 2px var(--today);}
+.an-cell.an-weekend{background:#e8ecf1;}
+/* a task that appeared in Excel since you last arranged the board */
+.an-lbl.an-new{border-style:dashed;border-color:var(--sel);border-left-style:solid;}
+/* selected label reveals its handles + resize grip and lifts slightly */
+.an-lbl.an-sel{box-shadow:0 0 0 2px var(--sel),0 8px 20px rgba(0,0,0,.22);}
+.an-lbl.an-sel .an-rsz::after{opacity:.9;}
+/* toolbar buttons + reschedule tooltip */
+.anno-bar .an-btn{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:6px;padding:5px 10px;font-size:12.5px;cursor:pointer;font-family:inherit;}
+.anno-bar .an-btn:hover{background:#f0f3f7;}
+.an-tip{position:fixed;z-index:130;background:#22303f;color:#fff;font-size:12px;font-weight:600;padding:4px 8px;border-radius:5px;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,.28);}
 
 /* ---- modal ---- */
 .modal{position:fixed;inset:0;background:rgba(20,28,38,.55);display:none;align-items:flex-start;

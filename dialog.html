@@ -118,6 +118,7 @@
     Annotated.mount($("annoBoard"), $("annoBar"), {
       storeKey: ($("ttl").textContent || "timetable"),
       canResize: function(){ return available.indexOf("end") >= 0; },
+      onToast: function(m){ toast(m); },
       onEdit: function(id, start, end){ send({ op:"setdates", id:id, start:start, end:end }); toast("Updating Excel…"); }
     });
   }

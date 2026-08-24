@@ -6,9 +6,8 @@
  * user can bend and re-anchor. Built for exporting a slide-ready PNG.
  *
  * It knows nothing about Excel: dragging a coloured run to reschedule calls
- * opts.onEdit(id, startISO, endISO) and the host persists it — the very same
- * contract the calendar view uses. Classes are namespaced `an-` so they never
- * collide with the calendar renderer's styles.
+ * opts.onEdit(id, startISO, endISO) and the host persists it — the same
+ * contract the calendar view uses. Classes are namespaced `an-`.
  */
 (function (global) {
   "use strict";
@@ -16,12 +15,13 @@
   var MON = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   var DOW = ["Mo","Tu","We","Th","Fr","Sa","Su"];
   var CW = 46, CH = 34;
-  // header tint per calendar-month (purely decorative)
   var HDR = {0:"#c47fb0",1:"#5aa0d6",2:"#7fb069",3:"#e0a13c",4:"#5aa0d6",5:"#7fb069",6:"#5aa0d6",7:"#d9736b",8:"#e0b93c",9:"#7fb069",10:"#b08bd6",11:"#5aa0d6"};
   var PALETTE = ["#2e86c1","#e67e22","#27ae60","#8e44ad","#c0392b","#16a085","#d4ac0d","#34495e","#d81b83","#2980b9","#af601a","#1abc9c"];
+  var PRESETS = { "16:9":[1600,900], "A4":[1754,1240] };
 
   function parse(s){ if(!s) return null; var p=String(s).split("-").map(Number); if(!p[0]) return null; return new Date(p[0],p[1]-1,p[2]); }
   function iso(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+  function todayISO(){ var t=new Date(); return iso(new Date(t.getFullYear(),t.getMonth(),t.getDate())); }
   function midx(d){ return (d.getDay()+6)%7; }
   function addD(d,n){ var x=new Date(d); x.setDate(x.getDate()+n); return x; }
   function daysBetween(a,b){ return Math.round((b-a)/86400000); }
@@ -30,23 +30,25 @@
   function isMile(t){ return !t.end || t.end===t.start; }
   function tStart(t){ return parse(t.start); }
   function tEnd(t){ var e=t.end?parse(t.end):null, s=tStart(t); return (e&&e>s)?e:s; }
-  function col(t,i){ return t.color || PALETTE[i%PALETTE.length]; }
+  function colr(t,i){ return t.color || PALETTE[i%PALETTE.length]; }
   function ink(hex){ var h=String(hex||"#2e86c1").replace("#",""); var r=parseInt(h.slice(0,2),16)||0,g=parseInt(h.slice(2,4),16)||0,b=parseInt(h.slice(4,6),16)||0;
     return (0.299*r+0.587*g+0.114*b)>150?"#22303f":"#ffffff"; }
 
   var S = { board:null, bar:null, items:[], opts:{}, mounted:false, storeKey:"default",
-            placed:{}, widths:{}, arrow:{}, selected:null, cw:1500, ch:950, ctx:null };
+            placed:{}, widths:{}, arrow:{}, selMonths:null, cw:1500, ch:950,
+            preset:"custom", perRow:"auto", title:"", lock:false, snap:true,
+            userPlaced:{}, known:null, sel:null, ctx:null };
   function ast(id){ return S.arrow[id]||(S.arrow[id]={startOff:null,wp:null,end:null}); }
+  function toast(m){ if(S.opts.onToast) S.opts.onToast(m); }
 
-  /* Persist the whole arrangement (which months, canvas size, and every label
-     position/width and arrow shape) so it survives re-renders, adding months,
-     Excel refreshes, and reopening the dialog. Keyed per timetable. */
   function persist(){ try{ localStorage.setItem("tt-anno:"+S.storeKey, JSON.stringify(
-      { selected:S.selected, cw:S.cw, ch:S.ch, placed:S.placed, widths:S.widths, arrow:S.arrow })); }catch(e){} }
+      { selMonths:S.selMonths, cw:S.cw, ch:S.ch, preset:S.preset, perRow:S.perRow, title:S.title,
+        lock:S.lock, snap:S.snap, placed:S.placed, widths:S.widths, arrow:S.arrow,
+        userPlaced:S.userPlaced, known:S.known })); }catch(e){} }
   function load(){ try{
       var raw=localStorage.getItem("tt-anno:"+S.storeKey); if(!raw) return; var d=JSON.parse(raw)||{};
-      if(d.selected) S.selected=d.selected; if(d.cw) S.cw=d.cw; if(d.ch) S.ch=d.ch;
-      if(d.placed) S.placed=d.placed; if(d.widths) S.widths=d.widths; if(d.arrow) S.arrow=d.arrow;
+      ["selMonths","cw","ch","preset","perRow","title","lock","snap","placed","widths","arrow","userPlaced","known"]
+        .forEach(function(k){ if(d[k]!==undefined && d[k]!==null) S[k]=d[k]; });
     }catch(e){} }
 
   function monthsAvail(items){
@@ -63,77 +65,119 @@
 
   function update(items){
     S.items = (items||[]).filter(function(t){ return tStart(t); });
+    var ids={}; S.items.forEach(function(t){ ids[t.id]=1; });
+    // prune layout state for tasks that no longer exist
+    [S.placed,S.widths,S.arrow,S.userPlaced].forEach(function(m){ Object.keys(m).forEach(function(k){ if(!ids[k]) delete m[k]; }); });
+    // new-task detection: first time we ever see this timetable, seed silently
+    if(S.known===null){ S.known={}; S.items.forEach(function(t){ S.known[t.id]=1; }); S._newIds={}; }
+    else { S._newIds={}; S.items.forEach(function(t){ if(!S.known[t.id]){ S._newIds[t.id]=1; } S.known[t.id]=1; }); }
     var avail = monthsAvail(S.items);
-    if(S.selected===null){                       // first time: default to the earliest 2 months with tasks
-      S.selected={}; avail.slice(0,2).forEach(function(m){ S.selected[m.k]=true; });
-    }
-    buildBar(avail); render();
+    if(S.selMonths===null){ S.selMonths={}; avail.slice(0,2).forEach(function(m){ S.selMonths[m.k]=true; }); }
+    persist(); buildBar(avail); render();
   }
 
+  /* ---------------- toolbar ---------------- */
   function buildBar(avail){
     if(!S.bar) return; S.bar.innerHTML="";
-    var lab=document.createElement("strong"); lab.textContent="Months:"; lab.style.fontSize="12.5px"; S.bar.appendChild(lab);
+    var b=S.bar;
+    add(b,"strong","Months:");
     avail.forEach(function(m){
-      var l=document.createElement("label"); l.className="an-mo";
-      var cb=document.createElement("input"); cb.type="checkbox"; cb.checked=!!S.selected[m.k];
-      cb.onchange=function(){ S.selected[m.k]=cb.checked; persist(); render(); };
-      l.appendChild(cb); l.appendChild(document.createTextNode(MON[m.m].slice(0,3)+" "+String(m.y).slice(2)));
-      S.bar.appendChild(l);
+      var l=el("label","an-mo"); var cb=el("input"); cb.type="checkbox"; cb.checked=!!S.selMonths[m.k];
+      cb.onchange=function(){ S.selMonths[m.k]=cb.checked; persist(); render(); };
+      l.appendChild(cb); l.appendChild(document.createTextNode(MON[m.m].slice(0,3)+" "+String(m.y).slice(2))); b.appendChild(l);
     });
-    var cg=document.createElement("span"); cg.className="an-grp";
-    cg.innerHTML='Canvas ';
-    var wi=document.createElement("input"); wi.type="number"; wi.step="20"; wi.value=S.cw;
-    var hi=document.createElement("input"); hi.type="number"; hi.step="20"; hi.value=S.ch;
-    wi.onchange=function(){ S.cw=+wi.value||1500; persist(); render(); };
-    hi.onchange=function(){ S.ch=+hi.value||950; persist(); render(); };
-    cg.appendChild(wi); cg.appendChild(document.createTextNode(" × ")); cg.appendChild(hi);
-    S.bar.appendChild(cg);
-    var hint=document.createElement("span"); hint.className="an-hint";
-    hint.textContent="Drag a coloured run to reschedule · drag labels / arrow dots to arrange.";
-    S.bar.appendChild(hint);
+    // title
+    var tg=el("span","an-grp"); tg.appendChild(document.createTextNode("Title "));
+    var ti=el("input"); ti.type="text"; ti.placeholder="(optional)"; ti.value=S.title; ti.style.width="150px";
+    ti.oninput=function(){ S.title=ti.value; persist(); render(); }; tg.appendChild(ti); b.appendChild(tg);
+    // months per row
+    var pg=el("span","an-grp"); pg.appendChild(document.createTextNode("Per row "));
+    var ps=el("select"); ["auto","1","2","3","4"].forEach(function(v){ var o=el("option"); o.value=v; o.textContent=v; if(String(S.perRow)===v)o.selected=true; ps.appendChild(o); });
+    ps.onchange=function(){ S.perRow=ps.value; persist(); render(); }; pg.appendChild(ps); b.appendChild(pg);
+    // canvas preset + size
+    var cg=el("span","an-grp"); cg.appendChild(document.createTextNode("Canvas "));
+    var cs=el("select"); [["custom","Custom"],["16:9","16:9"],["A4","A4 land."],["fit","Fit"]].forEach(function(p){ var o=el("option"); o.value=p[0]; o.textContent=p[1]; if(S.preset===p[0])o.selected=true; cs.appendChild(o); });
+    var wi=el("input"); wi.type="number"; wi.step="20"; wi.value=S.cw; wi.style.width="60px";
+    var hi=el("input"); hi.type="number"; hi.step="20"; hi.value=S.ch; hi.style.width="60px";
+    cs.onchange=function(){ S.preset=cs.value;
+      if(PRESETS[S.preset]){ S.cw=PRESETS[S.preset][0]; S.ch=PRESETS[S.preset][1]; wi.value=S.cw; hi.value=S.ch; render(); }
+      else if(S.preset==="fit"){ render(); fitToContent(); wi.value=S.cw; hi.value=S.ch; }
+      else render(); persist(); };
+    wi.onchange=function(){ S.cw=+wi.value||1500; S.preset="custom"; cs.value="custom"; persist(); render(); };
+    hi.onchange=function(){ S.ch=+hi.value||950; S.preset="custom"; cs.value="custom"; persist(); render(); };
+    cg.appendChild(cs); cg.appendChild(wi); cg.appendChild(document.createTextNode(" × ")); cg.appendChild(hi); b.appendChild(cg);
+    // actions
+    var ag=el("span","an-grp");
+    var tidy=el("button","an-btn"); tidy.textContent="Tidy"; tidy.title="Auto-arrange the labels"; tidy.onclick=function(){ layoutDefaults(true); persist(); }; ag.appendChild(tidy);
+    var reset=el("button","an-btn"); reset.textContent="Reset"; reset.title="Clear all manual arranging"; reset.onclick=function(){ S.placed={}; S.widths={}; S.arrow={}; S.userPlaced={}; persist(); render(); }; ag.appendChild(reset);
+    b.appendChild(ag);
+    // toggles
+    var lk=el("label","an-mo"); var lkc=el("input"); lkc.type="checkbox"; lkc.checked=S.lock;
+    lkc.onchange=function(){ S.lock=lkc.checked; persist(); render(); }; lk.appendChild(lkc); lk.appendChild(document.createTextNode("🔒 Lock dates")); b.appendChild(lk);
+    var sn=el("label","an-mo"); var snc=el("input"); snc.type="checkbox"; snc.checked=S.snap;
+    snc.onchange=function(){ S.snap=snc.checked; persist(); }; sn.appendChild(snc); sn.appendChild(document.createTextNode("Snap")); b.appendChild(sn);
+    // copy
+    var cp=el("button","an-btn"); cp.textContent="⧉ Copy"; cp.title="Copy the board to the clipboard"; cp.onclick=copyToClipboard; b.appendChild(cp);
+    var hint=el("span","an-hint"); hint.textContent="Click a label to edit it · drag a coloured run to reschedule."; b.appendChild(hint);
   }
+  function el(tag,cls){ var e=document.createElement(tag); if(cls) e.className=cls; return e; }
+  function add(p,tag,txt){ var e=el(tag); e.textContent=txt; if(tag==="strong") e.style.fontSize="12.5px"; p.appendChild(e); return e; }
 
   /* ---------------- render ---------------- */
   function render(){
     if(!S.board) return;
-    var board=S.board; board.innerHTML="";
+    var board=S.board; board.innerHTML=""; clearTip();
     board.style.setProperty("--an-cw",CW+"px"); board.style.setProperty("--an-ch",CH+"px");
     board.style.width=S.cw+"px"; board.style.height=S.ch+"px";
 
-    var row=document.createElement("div"); row.className="an-months-row"; board.appendChild(row);
+    var titleH = 0;
+    if(S.title){ var tt=el("div","an-title"); tt.textContent=S.title; board.appendChild(tt); titleH=44; }
+
+    var row=el("div","an-months-row"); row.style.top=(titleH?titleH+18:26)+"px";
+    if(S.perRow && S.perRow!=="auto"){ row.style.display="grid"; row.style.gridTemplateColumns="repeat("+S.perRow+",max-content)"; row.style.gap="26px 44px"; }
+    board.appendChild(row);
+
     var avail=monthsAvail(S.items);
-    var shown=avail.filter(function(m){ return S.selected[m.k]; });
-    var idColor={}, order={}; S.items.forEach(function(t,i){ idColor[t.id]=col(t,i); order[t.id]=i; });
+    var shown=avail.filter(function(m){ return S.selMonths[m.k]; });
+    var idColor={}; S.items.forEach(function(t,i){ idColor[t.id]=colr(t,i); });
+    var tISO=todayISO();
 
     var taskCells={}, taskWrap={};
     shown.forEach(function(mm){
-      var wrap=document.createElement("div"); wrap.className="an-month"; wrap.style.width=(7*CW+6*3)+"px";
-      var hdr=document.createElement("div"); hdr.className="an-mhdr"; hdr.style.background=HDR[mm.m]||"#4a6b8a"; hdr.textContent=MON[mm.m]+" "+mm.y; wrap.appendChild(hdr);
-      var dow=document.createElement("div"); dow.className="an-dow"; DOW.forEach(function(d){var s=document.createElement("div");s.textContent=d;dow.appendChild(s);}); wrap.appendChild(dow);
-      var grid=document.createElement("div"); grid.className="an-grid"; wrap.appendChild(grid);
+      var wrap=el("div","an-month"); wrap.style.width=(7*CW+6*3)+"px";
+      var hdr=el("div","an-mhdr"); hdr.style.background=HDR[mm.m]||"#4a6b8a"; hdr.textContent=MON[mm.m]+" "+mm.y; wrap.appendChild(hdr);
+      var dow=el("div","an-dow"); DOW.forEach(function(d,i){var s=el("div");s.textContent=d; if(i>=5)s.style.color="#b3bcc7"; dow.appendChild(s);}); wrap.appendChild(dow);
+      var grid=el("div","an-grid"); wrap.appendChild(grid);
       var first=new Date(mm.y,mm.m,1), start=addD(first,-midx(first)), last=new Date(mm.y,mm.m+1,0);
       var weeks=Math.ceil((midx(first)+last.getDate())/7);
       for(var i=0;i<weeks*7;i++){
-        var d=addD(start,i);
-        var cell=document.createElement("div"); cell.className="an-cell";
-        if(d.getMonth()!==mm.m){ cell.classList.add("empty"); grid.appendChild(cell); continue; }
-        var di=iso(d); cell.dataset.date=di;
-        cell.innerHTML='<span class="an-num">'+d.getDate()+'</span>';
+        var d=addD(start,i), c=el("div","an-cell");
+        if(d.getMonth()!==mm.m){ c.classList.add("empty"); grid.appendChild(c); continue; }
+        var di=iso(d); c.dataset.date=di; c.innerHTML='<span class="an-num">'+d.getDate()+'</span>';
         var covers=S.items.filter(function(t){ return !isMile(t)&&di>=t.start&&di<=iso(tEnd(t)); })
                    .concat(S.items.filter(function(t){ return isMile(t)&&t.start===di; }));
         if(covers.length){
           var primary=covers[0];
-          cell.classList.add("tinted"); cell.style.background=idColor[primary.id]; cell.style.color=ink(idColor[primary.id]);
-          cell.dataset.pid=primary.id; cell.dataset.jump=primary.id;
-          if(covers.length>1){
-            var bars=document.createElement("div"); bars.className="an-cbars";
-            covers.slice(1).forEach(function(t){ var b=document.createElement("div"); b.className="an-cbar"; b.style.background=idColor[t.id]; bars.appendChild(b); });
-            cell.appendChild(bars);
-          }
-          covers.forEach(function(t){ (taskCells[t.id]=taskCells[t.id]||[]).push(cell); taskWrap[t.id]=wrap; });
-        } else cell.classList.add("plain");
-        grid.appendChild(cell);
+          c.classList.add("tinted"); c.style.background=idColor[primary.id]; c.style.color=ink(idColor[primary.id]);
+          c.dataset.pid=primary.id; c.dataset.jump=primary.id;
+          if(isMile(primary)) c.classList.add("an-mile");
+          if(covers.length>1){ var bars=el("div","an-cbars");
+            covers.slice(1).forEach(function(t){ var bb=el("div","an-cbar"); bb.style.background=idColor[t.id]; bars.appendChild(bb); }); c.appendChild(bars); }
+          covers.forEach(function(t){ (taskCells[t.id]=taskCells[t.id]||[]).push(c); taskWrap[t.id]=wrap; });
+        } else { c.classList.add("plain"); if((i%7)>=5) c.classList.add("an-weekend"); }
+        if(di===tISO) c.classList.add("an-today");
+        grid.appendChild(c);
       }
+      // round the ends of each same-task run within a week row, and close the gap between run cells
+      var cells=[].slice.call(grid.children);
+      cells.forEach(function(c,i){
+        if(!c.dataset.pid) return; var col=i%7;
+        var lft = col>0 && cells[i-1].dataset.pid===c.dataset.pid;
+        var rgt = col<6 && cells[i+1] && cells[i+1].dataset.pid===c.dataset.pid;
+        c.style.borderRadius=(lft?"0":"4px")+" "+(rgt?"0":"4px")+" "+(rgt?"0":"4px")+" "+(lft?"0":"4px");
+        c.style.marginRight = rgt ? "-3px" : "";
+        if(lft||rgt) c.style.zIndex="0";
+      });
       row.appendChild(wrap);
     });
 
@@ -141,48 +185,85 @@
     svg.setAttribute("width",S.cw); svg.setAttribute("height",S.ch);
 
     var shownTasks=S.items.filter(function(t){ return taskCells[t.id]; }).sort(function(a,b){ return a.start<b.start?-1:1; });
-    var labels={}, handles={}; var bRect=board.getBoundingClientRect(); var perWrap={};
+    var labels={}, handles={};
     shownTasks.forEach(function(t){
       var color=idColor[t.id];
-      var lab=document.createElement("div"); lab.className="an-lbl"; lab.style.borderLeftColor=color;
+      var lab=el("div","an-lbl"); lab.style.borderLeftColor=color;
       lab.innerHTML='<span class="an-dt">'+(isMile(t)?fmtNice(tStart(t)):fmtNice(tStart(t))+"–"+fmtNice(tEnd(t)))+'</span>'+esc(t.name);
-      S.board.appendChild(lab); labels[t.id]=lab;
+      if(S._newIds && S._newIds[t.id]) lab.classList.add("an-new");
+      board.appendChild(lab); labels[t.id]=lab;
       if(S.widths[t.id]){ lab.style.width=S.widths[t.id]+"px"; lab.style.maxWidth="none"; }
       lab._anchor=taskCells[t.id][Math.floor(taskCells[t.id].length/2)];
       if(S.placed[t.id]){ lab.style.left=S.placed[t.id].x+"px"; lab.style.top=S.placed[t.id].y+"px"; }
-      else{ var wr=taskWrap[t.id].getBoundingClientRect(); var wkey=taskWrap[t.id].offsetLeft; perWrap[wkey]=(perWrap[wkey]||0);
-        var x=wr.left-bRect.left, y=(wr.bottom-bRect.top)+18+perWrap[wkey]*56; lab.style.left=x+"px"; lab.style.top=y+"px"; S.placed[t.id]={x:x,y:y}; perWrap[wkey]++; }
       makeLabelDrag(lab,t.id);
-      var g=document.createElement("div"); g.className="an-rsz"; lab.appendChild(g); makeResize(g,lab,t.id);
+      var g=el("div","an-rsz"); lab.appendChild(g); makeResize(g,lab,t.id);
       handles[t.id]={ s:mkHandle("start",t.id,color), w:mkHandle("wp",t.id,color), e:mkHandle("end",t.id,color) };
-      S.board.appendChild(handles[t.id].s); S.board.appendChild(handles[t.id].w); S.board.appendChild(handles[t.id].e);
+      board.appendChild(handles[t.id].s); board.appendChild(handles[t.id].w); board.appendChild(handles[t.id].e);
     });
 
     S.ctx={ tasks:shownTasks, labels:labels, handles:handles, svg:svg, color:idColor };
     board._anctx=S.ctx;
-    drawArrows();
+    layoutDefaults(false);        // place any not-yet-placed labels into the gutters
+    applySelection();
     enableReschedule();
   }
 
-  function rectOf(el,bRect){ var r=el.getBoundingClientRect(); return {x:r.left-bRect.left,y:r.top-bRect.top,w:r.width,h:r.height}; }
-  function centreOf(el,bRect){ var r=rectOf(el,bRect); return {x:r.x+r.w/2,y:r.y+r.h/2,w:r.w,h:r.h}; }
+  function rectOf(e,b){ var r=e.getBoundingClientRect(); return {x:r.left-b.left,y:r.top-b.top,w:r.width,h:r.height}; }
+  function centreOf(e,b){ var r=rectOf(e,b); return {x:r.x+r.w/2,y:r.y+r.h/2,w:r.w,h:r.h}; }
+
+  /* Gutter-based auto layout: left-anchored tasks stack in the left margin,
+     right-anchored ones on the right, so arrows fan outward instead of crossing. */
+  function layoutDefaults(force){
+    var c=S.ctx; if(!c) return; var b=S.board.getBoundingClientRect();
+    // gutters are measured from the actual month blocks, not the full-width row
+    var months=S.board.querySelectorAll(".an-month"); if(!months.length) return;
+    var rowL=1e9, rowR=0, rowTop=1e9;
+    months.forEach(function(m){ var r=m.getBoundingClientRect();
+      rowL=Math.min(rowL,r.left-b.left); rowR=Math.max(rowR,r.right-b.left); rowTop=Math.min(rowTop,r.top-b.top); });
+    rowTop=Math.max(rowTop,40);
+    var leftY=rowTop, rightY=rowTop;
+    c.tasks.slice().sort(function(a,bb){
+      var ca=centreOf(c.labels[a.id]._anchor,b), cb=centreOf(c.labels[bb.id]._anchor,b);
+      return ca.y-cb.y || ca.x-cb.x;
+    }).forEach(function(t){
+      var lab=c.labels[t.id]; if(!force && S.placed[t.id]) return;
+      var lw=lab.offsetWidth||220, lh=lab.offsetHeight||40, cc=centreOf(lab._anchor,b);
+      var left = cc.x < S.cw/2, x, y;
+      if(left){ x=Math.max(8, rowL-lw-32); y=leftY; leftY+=lh+12; }
+      else    { x=Math.min(S.cw-lw-8, rowR+32); y=rightY; rightY+=lh+12; }
+      lab.style.left=x+"px"; lab.style.top=y+"px"; S.placed[t.id]={x:x,y:y};
+    });
+    drawArrows();
+  }
+
+  function fitToContent(){
+    var b=S.board.getBoundingClientRect(), maxR=0, maxB=0;
+    S.board.querySelectorAll(".an-cell:not(.empty), .an-lbl, .an-title").forEach(function(e){
+      var r=e.getBoundingClientRect(); maxR=Math.max(maxR, r.right-b.left); maxB=Math.max(maxB, r.bottom-b.top);
+    });
+    S.cw=Math.round(maxR+24); S.ch=Math.round(maxB+24);
+    S.board.style.width=S.cw+"px"; S.board.style.height=S.ch+"px";
+    var svg=S.board.querySelector(".an-arrows"); if(svg){ svg.setAttribute("width",S.cw); svg.setAttribute("height",S.ch); }
+    persist();
+  }
 
   function drawArrows(){
-    var c=S.ctx; if(!c) return; var bRect=S.board.getBoundingClientRect(); var out="";
+    var c=S.ctx; if(!c) return; var b=S.board.getBoundingClientRect(); var out="";
     c.tasks.forEach(function(t){
-      var s=ast(t.id); var lr=rectOf(c.labels[t.id],bRect);
+      var s=ast(t.id), lr=rectOf(c.labels[t.id],b);
       var start={x:lr.x+(s.startOff?s.startOff.x:lr.w/2), y:lr.y+(s.startOff?s.startOff.y:lr.h/2)};
-      var cc=centreOf(c.labels[t.id]._anchor,bRect); var color=c.color[t.id]; var tip;
+      var cc=centreOf(c.labels[t.id]._anchor,b), color=c.color[t.id], tip;
       if(s.end){ tip={x:s.end.x,y:s.end.y}; }
       else{ var wpd=s.wp||{x:(start.x+cc.x)/2,y:(start.y+cc.y)/2};
         var hw=cc.w/2,hh=cc.h/2,vx=wpd.x-cc.x,vy=wpd.y-cc.y; if(vx===0&&vy===0){vy=-1;}
         var k=Math.min(hw/(Math.abs(vx)||1e6),hh/(Math.abs(vy)||1e6)), ul=Math.hypot(vx,vy)||1;
         tip={x:cc.x+vx*k+(vx/ul), y:cc.y+vy*k+(vy/ul)}; }
       var wp=s.wp||{x:(start.x+tip.x)/2,y:(start.y+tip.y)/2};
+      var sw = (t.id===S.sel)?3.5:2.5;
       var ang=Math.atan2(tip.y-wp.y,tip.x-wp.x), ah=8;
       var p1x=tip.x-ah*Math.cos(ang-0.42),p1y=tip.y-ah*Math.sin(ang-0.42);
       var p2x=tip.x-ah*Math.cos(ang+0.42),p2y=tip.y-ah*Math.sin(ang+0.42);
-      out+='<path d="M '+start.x+' '+start.y+' Q '+wp.x+' '+wp.y+' '+tip.x+' '+tip.y+'" fill="none" stroke="'+color+'" stroke-width="2.5"/>'
+      out+='<path d="M '+start.x+' '+start.y+' Q '+wp.x+' '+wp.y+' '+tip.x+' '+tip.y+'" fill="none" stroke="'+color+'" stroke-width="'+sw+'"/>'
          +'<polygon points="'+tip.x+','+tip.y+' '+p1x+','+p1y+' '+p2x+','+p2y+'" fill="'+color+'"/>';
       var H=c.handles[t.id];
       H.s.style.left=start.x+"px"; H.s.style.top=start.y+"px";
@@ -192,15 +273,39 @@
     c.svg.innerHTML=out;
   }
 
+  /* ---------------- selection (progressive disclosure) ---------------- */
+  function applySelection(){
+    var c=S.ctx; if(!c) return;
+    c.tasks.forEach(function(t){
+      var on = t.id===S.sel, H=c.handles[t.id];
+      H.s.style.display=H.w.style.display=H.e.style.display = on?"block":"none";
+      c.labels[t.id].classList.toggle("an-sel", on);
+    });
+    drawArrows();
+  }
+  function selectLabel(id){ S.sel=id; applySelection(); }
+  function clearSel(){ if(S.sel!==null){ S.sel=null; applySelection(); } }
+
+  /* ---------------- snapping ---------------- */
+  function snapXY(x,y,selfId){
+    if(!S.snap) return {x:x,y:y};
+    x=Math.round(x/8)*8; y=Math.round(y/8)*8;               // soft grid
+    var c=S.ctx; if(c) c.tasks.forEach(function(t){ if(t.id===selfId) return; var p=S.placed[t.id]; if(!p) return;
+      if(Math.abs(p.x-x)<=6) x=p.x; if(Math.abs(p.y-y)<=6) y=p.y; });       // align to other labels
+    return {x:x,y:y};
+  }
+
   function mkHandle(type,id,color){
-    var h=document.createElement("div"); h.className="an-handle"+(type==="wp"?" wp":type==="end"?" end":"");
+    var h=el("div","an-handle"+(type==="wp"?" wp":type==="end"?" end":"")); h.style.display="none";
     h.style.borderColor=color; if(type!=="wp") h.style.background=color;
     h.addEventListener("mousedown",function(e){
-      e.preventDefault(); e.stopPropagation(); var bRect=S.board.getBoundingClientRect();
-      function move(ev){ var px=ev.clientX-bRect.left, py=ev.clientY-bRect.top;
+      e.preventDefault(); e.stopPropagation(); var b=S.board.getBoundingClientRect();
+      function move(ev){ var px=ev.clientX-b.left, py=ev.clientY-b.top;
         if(type==="wp") ast(id).wp={x:px,y:py};
-        else if(type==="end") ast(id).end={x:px,y:py};
-        else{ var lr=rectOf(S.ctx.labels[id],bRect); ast(id).startOff={x:px-lr.x,y:py-lr.y}; }
+        else if(type==="end"){
+          if(S.snap){ var best=null,bd=14; S.board.querySelectorAll(".an-cell[data-date]").forEach(function(cel){ var r=cel.getBoundingClientRect(); var cx=r.left+r.width/2-b.left, cy=r.top+r.height/2-b.top; var d=Math.hypot(cx-px,cy-py); if(d<bd){bd=d;best={x:cx,y:cy};} }); if(best){px=best.x;py=best.y;} }
+          ast(id).end={x:px,y:py};
+        } else { var lr=rectOf(S.ctx.labels[id],b); ast(id).startOff={x:px-lr.x,y:py-lr.y}; }
         drawArrows(); }
       function up(){ persist(); document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up); }
       document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
@@ -221,28 +326,28 @@
   function makeLabelDrag(lab,id){
     lab.addEventListener("mousedown",function(e){
       if(e.target.classList.contains("an-rsz")) return;
-      e.preventDefault(); lab.classList.add("drag"); var bRect=S.board.getBoundingClientRect();
-      var dx=e.clientX-lab.getBoundingClientRect().left, dy=e.clientY-lab.getBoundingClientRect().top;
-      function move(ev){ var x=Math.max(4,ev.clientX-bRect.left-dx), y=Math.max(4,ev.clientY-bRect.top-dy);
-        lab.style.left=x+"px"; lab.style.top=y+"px"; S.placed[id]={x:x,y:y}; drawArrows(); }
-      function up(){ lab.classList.remove("drag"); persist(); document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up); }
+      e.preventDefault(); var b=S.board.getBoundingClientRect();
+      var dx=e.clientX-lab.getBoundingClientRect().left, dy=e.clientY-lab.getBoundingClientRect().top, moved=false;
+      function move(ev){ moved=true; lab.classList.add("drag"); lab.classList.remove("an-new");
+        var sp=snapXY(Math.max(4,ev.clientX-b.left-dx), Math.max(4,ev.clientY-b.top-dy), id);
+        lab.style.left=sp.x+"px"; lab.style.top=sp.y+"px"; S.placed[id]={x:sp.x,y:sp.y}; S.userPlaced[id]=1; drawArrows(); }
+      function up(){ lab.classList.remove("drag");
+        if(moved) persist(); else selectLabel(id);         // click (no move) selects; drag arranges
+        document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up); }
       document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
     });
   }
 
-  /* Reschedule by dragging the coloured run itself:
-       - grab the middle  → MOVE  (shift start & end together)
-       - grab the left end → resize START
-       - grab the right end→ resize END (or extend a milestone into a range)
-     On drop we hand the new start/end to the host, which writes them to Excel —
-     the same onEdit contract the calendar view uses. Edge-resize is only offered
-     when the host says an End column exists (opts.canResize). */
+  /* ---------------- reschedule (writes to Excel) ---------------- */
+  var _tip=null;
+  function showTip(x,y,txt){ if(!_tip){ _tip=el("div","an-tip"); document.body.appendChild(_tip); } _tip.textContent=txt; _tip.style.left=(x+14)+"px"; _tip.style.top=(y+16)+"px"; }
+  function clearTip(){ if(_tip){ _tip.remove(); _tip=null; } }
+
   var EDGE=10, _dragging=false;
   function byId(id){ var t=null; S.items.some(function(x){ if(x.id===id){t=x;return true;} }); return t; }
   function zoneAt(cell,x){
     var t=byId(cell.dataset.pid); if(!t) return "move";
-    var canR = S.opts.canResize ? S.opts.canResize() : true;
-    if(!canR) return "move";
+    var canR = S.opts.canResize ? S.opts.canResize() : true; if(!canR) return "move";
     var r=cell.getBoundingClientRect(), di=cell.dataset.date;
     if(di===t.start && (x-r.left)<=EDGE) return "start";
     if(di===iso(tEnd(t)) && (r.right-x)<=EDGE) return "end";
@@ -251,32 +356,34 @@
   function enableReschedule(){
     var board=S.board;
     board.querySelectorAll(".an-cell.tinted[data-pid]").forEach(function(cell){
+      if(S.lock){ cell.style.cursor="default"; return; }
       cell.addEventListener("mousemove",function(e){ if(_dragging) return;
         cell.style.cursor = zoneAt(cell,e.clientX)==="move" ? "grab" : "ew-resize"; });
       cell.addEventListener("mousedown",function(e){
-        if(e.button!==0) return;
+        if(e.button!==0 || S.lock) return;
         var t=byId(cell.dataset.pid); if(!t) return; var id=t.id;
         e.preventDefault();
         var mode=zoneAt(cell,e.clientX);
         var grab=parse(cell.dataset.date), s0=parse(t.start), end0=t.end?parse(t.end):s0;
         var moved=false, pending=null; _dragging=true;
-        board.classList.add("an-rescheduling");    // let elementFromPoint see cells, not the handles/labels on top
+        board.classList.add("an-rescheduling");
         document.body.style.cursor = mode==="move" ? "grabbing" : "ew-resize";
-        function cellUnder(x,y){ var el=document.elementFromPoint(x,y); return el&&el.closest?el.closest(".an-cell[data-date]"):null; }
-        function apply(target){
+        function cellUnder(x,y){ var el2=document.elementFromPoint(x,y); return el2&&el2.closest?el2.closest(".an-cell[data-date]"):null; }
+        function apply(target,ev){
           var ns=s0, ne=end0;
           if(mode==="move"){ var d=daysBetween(grab,target); ns=addD(s0,d); ne=addD(end0,d); }
           else if(mode==="start"){ ns = target>end0 ? end0 : target; ne=end0; }
           else { ne = target<s0 ? s0 : target; ns=s0; }
           var lo=iso(ns), hi=iso(ne);
-          board.querySelectorAll(".an-cell[data-date]").forEach(function(c){
-            c.classList.toggle("an-shift", c.dataset.date>=lo && c.dataset.date<=hi); });
+          board.querySelectorAll(".an-cell[data-date]").forEach(function(c){ c.classList.toggle("an-shift", c.dataset.date>=lo && c.dataset.date<=hi); });
           pending={ start:iso(ns), end: ne>ns ? iso(ne) : "" };
+          var label = mode==="start"?"start ":mode==="end"?"end ":"";
+          showTip(ev.clientX, ev.clientY, label + fmtNice(ns) + (ne>ns ? " → "+fmtNice(ne) : ""));
         }
-        function move(ev){ var c=cellUnder(ev.clientX,ev.clientY); if(!c) return; moved=true; apply(parse(c.dataset.date)); }
+        function move(ev){ var c=cellUnder(ev.clientX,ev.clientY); if(!c) return; moved=true; apply(parse(c.dataset.date),ev); }
         function up(){
           _dragging=false; document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up);
-          document.body.style.cursor=""; board.classList.remove("an-rescheduling");
+          document.body.style.cursor=""; board.classList.remove("an-rescheduling"); clearTip();
           board.querySelectorAll(".an-shift").forEach(function(c){ c.classList.remove("an-shift"); });
           if(moved && pending && (pending.start!==t.start || (pending.end||"")!==(t.end||""))){
             global.Cal && (global.Cal._suppressClick=true);
@@ -286,14 +393,25 @@
         document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
       });
     });
+    // click on empty board clears the selection
+    if(!board._anDeselect){ board._anDeselect=true;
+      board.addEventListener("mousedown",function(e){ if(e.target.closest(".an-lbl")||e.target.closest(".an-handle")) return; clearSel(); }); }
   }
 
-  function exportCanvas(html2canvas){
-    var board=S.board; board.classList.add("an-exporting");
-    return html2canvas(board,{backgroundColor:"#ffffff",scale:3,useCORS:true,logging:false,
-      width:board.offsetWidth,height:board.offsetHeight,windowWidth:board.offsetWidth})
+  /* ---------------- export ---------------- */
+  function capture(){ var h2c=global.html2canvas; var board=S.board; board.classList.add("an-exporting");
+    return h2c(board,{backgroundColor:"#ffffff",scale:3,useCORS:true,logging:false,width:board.offsetWidth,height:board.offsetHeight,windowWidth:board.offsetWidth})
       .then(function(c){ board.classList.remove("an-exporting"); return c; })
-      .catch(function(e){ board.classList.remove("an-exporting"); throw e; });
+      .catch(function(e){ board.classList.remove("an-exporting"); throw e; }); }
+  function exportCanvas(){ return capture(); }
+  function copyToClipboard(){
+    if(!global.html2canvas){ toast("PNG library not loaded"); return; }
+    capture().then(function(c){ c.toBlob(function(blob){
+      if(navigator.clipboard && global.ClipboardItem){
+        navigator.clipboard.write([new ClipboardItem({"image/png":blob})]).then(function(){ toast("Copied to clipboard"); },
+          function(){ toast("Clipboard blocked — use Export PNG"); });
+      } else toast("Clipboard not available — use Export PNG");
+    },"image/png"); }).catch(function(e){ toast("Copy failed: "+(e&&e.message||e)); });
   }
 
   global.Annotated = { mount:mount, update:update, render:render, exportCanvas:exportCanvas,
