@@ -202,9 +202,10 @@
     var shownTasks=S.items.filter(function(t){ return taskCells[t.id]; }).sort(function(a,b){ return a.start<b.start?-1:1; });
     var labels={}, handles={};
     shownTasks.forEach(function(t){
-      var color=idColor[t.id];
-      var lab=el("div","an-lbl"); lab.style.borderLeftColor=color;
-      lab.innerHTML='<span class="an-dt">'+(isMile(t)?fmtNice(tStart(t)):fmtNice(tStart(t))+"–"+fmtNice(tEnd(t)))+'</span>'+esc(t.name);
+      var color=idColor[t.id], tc=ink(color);
+      var lab=el("div","an-lbl"); lab.style.background=color; lab.style.color=tc; lab.style.borderColor=color;
+      var dtc = tc==="#ffffff" ? "rgba(255,255,255,.8)" : "rgba(0,0,0,.55)";
+      lab.innerHTML='<span class="an-dt" style="color:'+dtc+'">'+(isMile(t)?fmtNice(tStart(t)):fmtNice(tStart(t))+"–"+fmtNice(tEnd(t)))+'</span>'+esc(t.name);
       if(S._newIds && S._newIds[t.id]) lab.classList.add("an-new");
       board.appendChild(lab); labels[t.id]=lab;
       if(S.widths[t.id]){ lab.style.width=S.widths[t.id]+"px"; lab.style.maxWidth="none"; }
