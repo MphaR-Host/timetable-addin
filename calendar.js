@@ -20,6 +20,9 @@
     xlarge:      {col:820,laneH:40,barH:34,barTop:42,minDay:58,dlH:29,barFs:17,dayFs:17.5,dlFs:16.5,numSz:34,dowFs:15,mheadFs:21,legFs:16}
   };
   var D = DENSITY.comfortable;
+  var CMAP = {};        // task id -> display colour, de-duplicated
+  var EXPANDED = {};     // week key -> true while its hidden lanes are shown
+  var LAST = null;       // last render arguments, so a "+N more" chip can redraw
 
   /* ---- dates ---- */
   function parseD(s){ if(!s) return null; var p=String(s).split("-").map(Number);
@@ -71,13 +74,62 @@
 
   var DONE_FILL="#e4e9ee", DONE_INK="#5a656f", DONE_EDGE="#9aa6b2";
 
+  /* The host falls back to a small palette assigned by row, so a sheet with no
+     Colour column hands us the same colour every ten tasks. Keep every colour
+     that is unique and re-assign only the clashes, so no two visible tasks
+     share a fill. An explicitly chosen colour is only moved if it collides. */
+  var DISTINCT=["#2e86c1","#e67e22","#27ae60","#8e44ad","#c0392b","#16a085","#d4ac0d","#34495e",
+                "#d81b83","#2980b9","#af601a","#1abc9c","#7f8c8d","#c0398b","#0e6655","#b7950b",
+                "#6c3483","#1f618d","#a04000","#117864"];
+  /* Past the hand-picked list, walk the hue circle by the golden angle so any
+     number of tasks still gets a colour of its own. */
+  function hslHex(h,s,l){
+    s/=100; l/=100;
+    var k=function(n){ return (n+h/30)%12; },
+        a=s*Math.min(l,1-l),
+        f=function(n){ var v=l-a*Math.max(-1,Math.min(k(n)-3,Math.min(9-k(n),1)));
+          return Math.round(255*v).toString(16).padStart(2,"0"); };
+    return "#"+f(0)+f(8)+f(4);
+  }
+  function distinctColors(items){
+    var map={}, used={}, di=0, gi=0;
+    items.forEach(function(it){
+      var c=String(it.color||"").toLowerCase();
+      if(!c || used[c]){
+        c=null;
+        while(di<DISTINCT.length){                       // curated colours first
+          var cand=DISTINCT[di++].toLowerCase();
+          if(!used[cand]){ c=cand; break; }
+        }
+        while(!c){                                       // then generated hues
+          var gen=hslHex((gi*137.508)%360, 58, 38); gi++;
+          if(!used[gen]) c=gen;
+          if(gi>720) { c=gen; break; }
+        }
+      }
+      used[c]=1; map[it.id]=c;
+    });
+    return map;
+  }
+  function colOf(it){ return CMAP[it.id] || it.color || "#2e86c1"; }
+
+  /* ISO-8601 week number (weeks start Monday; week 1 holds the first Thursday). */
+  function isoWeek(d){
+    var x=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+    x.setDate(x.getDate()+3-mondayIndex(x));
+    var first=new Date(x.getFullYear(),0,4);
+    return 1+Math.round(((x-first)/86400000-3+mondayIndex(first))/7);
+  }
+
   /* Status reads as three different fills, never three opacities.
      backgroundColor - not the `background` shorthand - or the inline value
      would reset background-image and wipe out the Ongoing stripes. */
   function paint(el,color,status,edge){
     if(status==="Done"){
+      // Keep a stripe of the task's own colour: a finished item should still say
+      // which workstream it belonged to, not just that it is finished.
       el.style.backgroundColor=DONE_FILL; el.style.color=DONE_INK;
-      el.style.boxShadow=edge?("inset "+edge+" 0 0 "+DONE_EDGE):"inset 0 0 0 1px "+DONE_EDGE;
+      el.style.boxShadow="inset "+(edge||"3px")+" 0 0 "+color+", inset 0 0 0 1px "+DONE_EDGE;
     } else if(status==="Ongoing"){
       el.style.backgroundColor=solidFill(color); el.style.color="#ffffff";
       el.style.boxShadow=edge?("inset "+edge+" 0 0 rgba(0,0,0,.35)"):"0 0 0 1px rgba(255,255,255,.55)";
@@ -112,15 +164,41 @@
     return { placed:out, lanes:laneEnds.length };
   }
 
-  function monthRange(items){
+  function mkey(d){ return d.getFullYear()+"-"+d.getMonth(); }
+  function parseMKey(s){ var p=String(s||"").split("-"); return p.length===2 && p[0]!==""
+    ? new Date(+p[0], +p[1], 1) : null; }
+
+  /* Every month a task touches, for the month pickers. */
+  function monthsOf(items){
+    var out=[], seen={};
+    (items||[]).forEach(function(it){ var s=iStart(it); if(!s) return;
+      var cur=new Date(s.getFullYear(),s.getMonth(),1), end=iEnd(it);
+      while(cur<=end){ var k=mkey(cur);
+        if(!seen[k]){ seen[k]=1; out.push({ k:k, y:cur.getFullYear(), m:cur.getMonth(),
+          label:MON[cur.getMonth()].slice(0,3)+" "+cur.getFullYear() }); }
+        cur=new Date(cur.getFullYear(),cur.getMonth()+1,1); }
+    });
+    out.sort(function(a,b){ return a.y-b.y||a.m-b.m; });
+    return out;
+  }
+
+  /* The span of months to draw. Without an explicit from/to this is every month
+     the data touches (plus today), which on a long project is a lot of empty
+     grids - hence opts.from / opts.to / opts.hideEmpty. */
+  function monthRange(items, from, to){
     var min=null,max=null;
     items.forEach(function(it){ var s=iStart(it),e=iEnd(it);
       if(!min||s<min)min=s; if(!max||e>max)max=e; });
     var t=today0();
     if(!min){ min=t; max=t; }
     if(t<min)min=t; if(t>max)max=t;
-    return { from:new Date(min.getFullYear(),min.getMonth(),1),
-             to:new Date(max.getFullYear(),max.getMonth(),1) };
+    var f=new Date(min.getFullYear(),min.getMonth(),1),
+        l=new Date(max.getFullYear(),max.getMonth(),1);
+    var pf=parseMKey(from), pl=parseMKey(to);
+    if(pf&&pf>f) f=pf;
+    if(pl&&pl<l) l=pl;
+    if(f>l) l=new Date(f);
+    return { from:f, to:l };
   }
 
   /* Milestone labels wrap, so their height is only known once in the DOM.
@@ -135,8 +213,11 @@
     });
   }
 
-  function renderMonth(year,month,vis,t,showDates){
-    var wrap=document.createElement("div"); wrap.className="month";
+  function renderMonth(year,month,vis,t,opts){
+    opts=opts||{};
+    var showDates=opts.showDates, weekNums=!!opts.weekNums;
+    var maxLanes=opts.maxLanes||5;
+    var wrap=document.createElement("div"); wrap.className="month"+(weekNums?" wknums":"");
     wrap.innerHTML='<div class="mhead">'+MON[month]+" "+year+'</div><div class="dow">'+
       DOW.map(function(d,i){ return '<div class="'+(i>=5?"we":"")+'">'+d+"</div>"; }).join("")+"</div>";
     var weeksBox=document.createElement("div"); weeksBox.className="weeks";
@@ -156,12 +237,32 @@
         var s=iStart(it), e=iEnd(it);
         if(e<wkStart||s>wkEnd) return;
         var segS=s<wkStart?wkStart:s, segE=e>wkEnd?wkEnd:e;
-        if(!it.async){ var fri=addDays(wkStart,4);
-          if(segS>fri) return; if(segE>fri) segE=fri; if(segE<segS) return; }
+        if(!it.async){
+          var fri=addDays(wkStart,4);
+          if(segS>fri){
+            /* Mon-Fri is all this week shows, and this segment is entirely on the
+               weekend. Skip it - unless the task has no working day at all, which
+               would drop it from the grid completely; pin that to the Friday. */
+            if(firstVis(it)>lastVis(it)){ segS=fri; segE=fri; }
+            else return;
+          } else {
+            if(segE>fri) segE=fri;
+            if(segE<segS) return;
+          }
+        }
         evs.push({ it:it, s:segS.getTime(), e:segE.getTime(),
                    col:daysBetween(wkStart,segS), span:daysBetween(segS,segE)+1 });
       });
-      var res=assignLanes(evs), placed=res.placed, lanes=res.lanes;
+      var res=assignLanes(evs), placed=res.placed, allLanes=res.lanes;
+      /* A busy week can stack a dozen lanes and make the row enormous, so cap it
+         and offer the rest behind a "+N more" chip. */
+      var wkKey=fmtISO(wkStart), openWk=!!EXPANDED[wkKey];
+      var capped=(!openWk && allLanes>maxLanes);
+      var lanes=capped?maxLanes:allLanes, overflow=0;
+      if(capped){
+        overflow=placed.filter(function(p){ return p.lane>=maxLanes; }).length;
+        placed=placed.filter(function(p){ return p.lane<maxLanes; });
+      }
 
       /* Single-day milestones live inside their own day cell only - a one-day
          event must never look like it spans several days. */
@@ -190,29 +291,35 @@
           var box=document.createElement("div"); box.className="msbox"; box.style.top=msTop+"px";
           dayMs.forEach(function(it){
             var el=document.createElement("div");
-            el.className="msi st-"+esc(it.status)+(it.key?" key":"");
+            el.className="msi st-"+esc(it.status)+(it.key?" key":"")+(it.async?" is-async":"");
             el.dataset.jump=it.id;
             el.dataset.start=fmtISO(iStart(it));
             el.dataset.async=it.async?"1":"";
             el.dataset.name=it.name||"";
-            paint(el,it.color,it.status,"3px");
-            var gcol=it.status==="Ongoing"?"#ffffff":(it.status==="Done"?DONE_INK:ink(it.color));
+            paint(el,colOf(it),it.status,"3px");
+            var gcol=it.status==="Ongoing"?"#ffffff":(it.status==="Done"?DONE_INK:ink(colOf(it)));
             el.innerHTML='<span class="sg" style="color:'+gcol+'">'+(SG[it.status]||"○")+
               '</span><span class="lbl">'+(esc(it.name)||"(untitled)")+"</span>";
-            el.title=(it.name||"(untitled)")+" · "+it.status+" · "+fmtISO(iStart(it))+
-              (it.notes?"\n"+it.notes:"");
+            el.setAttribute("aria-label",(it.name||"(untitled)")+", "+it.status+", "+fmtISO(iStart(it)));
+            el.dataset.status=it.status;
+            el.dataset.notes=it.notes||"";
             box.appendChild(el);
           });
           cell.appendChild(box);
         }
         days.appendChild(cell);
       }
+      if(weekNums){
+        var wn=document.createElement("div"); wn.className="wknum";
+        wn.textContent=isoWeek(wkStart); wn.title="ISO week "+isoWeek(wkStart);
+        week.appendChild(wn);
+      }
       week.appendChild(days);
 
       placed.forEach(function(p){
         var bar=document.createElement("div");
-        bar.className="bar st-"+esc(p.it.status);
-        paint(bar,p.it.color,p.it.status,"");
+        bar.className="bar st-"+esc(p.it.status)+(p.it.async?" is-async":"");
+        paint(bar,colOf(p.it),p.it.status,"");
         bar.style.left="calc("+((p.col/7)*100)+"% + 3px)";
         bar.style.width="calc("+((p.span/7)*100)+"% - 6px)";
         bar.style.top=(D.barTop+p.lane*D.laneH)+"px";
@@ -223,8 +330,10 @@
         var label=(contL?"… ":((SG[p.it.status]||"")+" "))+(p.it.name||"(untitled)");
         if(showDates&&!contL) label+="  ("+dm(iStart(p.it))+"–"+dm(iEnd(p.it))+")";
         bar.textContent=label;
-        bar.title=(p.it.name||"(untitled)")+" · "+p.it.status+" · "+
-          fmtISO(iStart(p.it))+" → "+fmtISO(iEnd(p.it))+(p.it.notes?"\n"+p.it.notes:"");
+        bar.setAttribute("aria-label",(p.it.name||"(untitled)")+", "+p.it.status+", "+
+          fmtISO(iStart(p.it))+" to "+fmtISO(iEnd(p.it)));
+        bar.dataset.status=p.it.status;
+        bar.dataset.notes=p.it.notes||"";
         bar.dataset.jump=p.it.id;
         // Whole-task dates + whether THIS segment is a continuation, so drag
         // can offer edge-resize only on the segment showing the real edge.
@@ -236,6 +345,18 @@
         bar.dataset.name=p.it.name||"";
         week.appendChild(bar);
       });
+      if(capped || (openWk && allLanes>maxLanes)){
+        var chip=document.createElement("button");
+        chip.type="button"; chip.className="lanemore";
+        chip.textContent = capped ? ("+"+overflow+" more") : "− less";
+        chip.style.top=(D.barTop+lanes*D.laneH)+"px";
+        (function(k){ chip.addEventListener("click", function(e){
+          e.preventDefault(); e.stopPropagation();
+          EXPANDED[k]=!EXPANDED[k];
+          if(LAST) render(LAST.target, LAST.items, LAST.opts);
+        }); })(wkKey);
+        week.appendChild(chip);
+      }
       weeksBox.appendChild(week);
     }
     wrap.appendChild(weeksBox);
@@ -248,7 +369,7 @@
         var li=document.createElement("div"); li.className="li"; li.dataset.jump=it.id;
         var rng=isSpan(it)?(s.getDate()+"–"+iEnd(it).getDate()):String(s.getDate());
         li.innerHTML='<span class="d">'+rng+'</span><span class="swatch" style="background:'+
-          esc(it.color)+'"></span><span class="sg" style="color:'+ink(it.color)+'">'+
+          esc(colOf(it))+'"></span><span class="sg" style="color:'+ink(colOf(it))+'">'+
           (SG[it.status]||"○")+'</span><span class="st-'+esc(it.status)+'">'+
           (esc(it.name)||"(untitled)")+"</span>";
         leg.appendChild(li);
@@ -260,20 +381,48 @@
 
   function render(target, items, opts){
     opts = opts || {};
+    LAST = { target:target, items:items, opts:opts };
     var hidden = opts.hidden || [];
-    var vis = items.filter(function(it){
-      return iStart(it) && hidden.indexOf(it.status) === -1; });
+    var dated = items.filter(function(it){ return iStart(it); });
+    // Colours are derived from every dated task, not just the visible ones, so
+    // hiding a status doesn't shuffle the colours of everything else.
+    CMAP = distinctColors(dated);
+    var vis = dated.filter(function(it){ return hidden.indexOf(it.status) === -1; });
     target.innerHTML = "";
-    var r = monthRange(vis), t = today0();
+    var r = monthRange(vis, opts.from, opts.to), t = today0();
+    var tKey = mkey(t);
     var box = document.createElement("div"); box.className = "months";
-    var cur = new Date(r.from);
+    var cur = new Date(r.from), drawn = 0;
     while(cur <= r.to){
-      box.appendChild(renderMonth(cur.getFullYear(), cur.getMonth(), vis, t, opts.showDates));
+      var mStart=new Date(cur.getFullYear(),cur.getMonth(),1),
+          mEnd=new Date(cur.getFullYear(),cur.getMonth()+1,0);
+      var has = vis.some(function(it){ return iEnd(it)>=mStart && iStart(it)<=mEnd; });
+      if(has || !opts.hideEmpty){
+        var el = renderMonth(cur.getFullYear(), cur.getMonth(), vis, t, opts);
+        el.dataset.mk = mkey(cur);
+        if(mkey(cur)===tKey) el.classList.add("cur");
+        box.appendChild(el); drawn++;
+      }
       cur = new Date(cur.getFullYear(), cur.getMonth()+1, 1);
+    }
+    // Never end up with a blank pane: fall back to the month we are in.
+    if(!drawn){
+      var only = renderMonth(t.getFullYear(), t.getMonth(), vis, t, opts);
+      only.dataset.mk = tKey; only.classList.add("cur"); box.appendChild(only);
     }
     target.appendChild(box);
     applyDensity(opts.density, opts.perRow);
     balanceWeeks(target);
+    if(opts.scrollToday) scrollToToday(target);
+  }
+
+  /* Bring the month containing today into view - on a long project the calendar
+     otherwise opens months away from where the work is. */
+  function scrollToToday(target){
+    var el=(target||document).querySelector(".month.cur");
+    if(!el) return false;
+    try { el.scrollIntoView({block:"nearest", inline:"nearest"}); } catch(e){ el.scrollIntoView(); }
+    return true;
   }
 
   function statusKey(el, items){
@@ -298,6 +447,30 @@
    */
   var EDGE = 10;  // px hit-zone at each end of a bar for resize
   function fmtNice(iso){ var d=parseD(iso); return d? d.getDate()+" "+MON[d.getMonth()].slice(0,3): iso; }
+
+  /* Hover card. A native title tooltip is slow to appear, cannot be styled and
+     buries the notes on a second line, so draw our own. */
+  var hoverEl=null, hoverT=null;
+  function hideHover(){ clearTimeout(hoverT); if(hoverEl){ hoverEl.remove(); hoverEl=null; } }
+  function showHover(el,x,y){
+    hideHover();
+    var name=el.dataset.name||"(untitled)", st=el.dataset.status||"",
+        s=el.dataset.start||"", e=el.dataset.end||"", notes=el.dataset.notes||"";
+    var when = s ? ((e&&e!==s) ? fmtNice(s)+" → "+fmtNice(e) : fmtNice(s)) : "";
+    var days = (s&&e&&e!==s) ? (daysBetween(parseD(s),parseD(e))+1)+" days" : "";
+    var box=document.createElement("div"); box.className="hovercard";
+    box.innerHTML='<div class="hc-t">'+esc(name)+'</div><div class="hc-m">'+esc(when)+
+      (days?'<span class="hc-s"> · '+days+'</span>':'')+
+      (st?'<span class="hc-s"> · '+esc(st)+'</span>':'')+
+      (el.dataset.async?'<span class="hc-s"> · async</span>':'')+'</div>'+
+      (notes?'<div class="hc-n">'+esc(notes)+'</div>':'');
+    document.body.appendChild(box);
+    var vw=window.innerWidth||1000, vh=window.innerHeight||800;
+    var left=Math.min(x+14, vw-box.offsetWidth-10), top=y+18;
+    if(top+box.offsetHeight>vh) top=Math.max(8, y-box.offsetHeight-12);
+    box.style.left=Math.max(8,left)+"px"; box.style.top=top+"px";
+    hoverEl=box;
+  }
 
   function enableDrag(root, opts){
     opts = opts || {};
@@ -462,6 +635,8 @@
                  downX: e.clientX, moved: false, pending: null };
         bar.style.pointerEvents = "none";         // let dateAt see cells beneath
         document.body.classList.add("dragging");
+        global.Cal._dragging = true;              // hosts pause refresh while this is set
+        hideHover();
         return;
       }
       // Empty day: begin a create-selection. Drag across days for a span.
@@ -469,6 +644,8 @@
       if (day && day.dataset.date && opts.onCreate){
         e.preventDefault();
         daySel = { start: day.dataset.date, end: day.dataset.date, moved: false };
+        global.Cal._dragging = true;
+        hideHover();
         paintRange(day.dataset.date, day.dataset.date);
       }
     });
@@ -497,6 +674,7 @@
       if (drag){
         var dr = drag; drag = null;
         document.body.classList.remove("dragging");
+        global.Cal._dragging = false;
         dr.bar.style.pointerEvents = "";
         clearRange(); hideTip();
         if (dr.moved && dr.pending &&
@@ -508,10 +686,38 @@
       }
       if (daySel){
         var s = daySel.start, e2 = daySel.end; daySel = null;
+        global.Cal._dragging = false;
         clearRange(); hideTip();
         var lo = s < e2 ? s : e2, hi = s < e2 ? e2 : s;
         if (opts.onCreate) opts.onCreate(lo, lo === hi ? "" : hi);
       }
+    });
+
+    /* hover card on bars and milestones */
+    root.addEventListener("mouseover", function(e){
+      if (drag || daySel) return;
+      var b = e.target.closest ? e.target.closest(".bar,.msi") : null;
+      if (!b || !b.dataset.jump) return;
+      var x=e.clientX, y=e.clientY;
+      clearTimeout(hoverT); hoverT=setTimeout(function(){ showHover(b,x,y); }, 160);
+    });
+    root.addEventListener("mouseout", function(e){
+      if (e.target.closest && e.target.closest(".bar,.msi")) hideHover();
+    });
+    root.addEventListener("mousedown", hideHover, true);
+
+    /* Escape abandons an in-flight move/resize or day selection */
+    document.addEventListener("keydown", function(e){
+      if (e.key !== "Escape") return;
+      if (drag){
+        var dr=drag; drag=null;
+        document.body.classList.remove("dragging");
+        global.Cal._dragging=false; global.Cal._suppressClick=true;
+        dr.bar.style.pointerEvents=""; clearRange(); hideTip();
+      } else if (daySel){
+        daySel=null; global.Cal._dragging=false; clearRange(); hideTip();
+      } else return;
+      e.preventDefault();
     });
   }
 
@@ -520,7 +726,8 @@
     balanceWeeks: balanceWeeks, paint: paint, ink: ink, textOn: textOn, esc: esc,
     parseD: parseD, fmtISO: fmtISO, today0: today0, addDays: addDays,
     daysBetween: daysBetween, iStart: iStart, iEnd: iEnd, isSpan: isSpan,
-    enableDrag: enableDrag, _suppressClick: false,
+    enableDrag: enableDrag, _suppressClick: false, _dragging: false,
+    monthsOf: monthsOf, scrollToToday: scrollToToday, colOf: colOf, isoWeek: isoWeek,
     STATUSES: STATUSES, SG: SG, MON: MON, DENSITY: DENSITY
   };
 })(window);

@@ -80,7 +80,8 @@
   /* ---- config, stored inside the workbook ---- */
   function defaults(){
     return { sheet:"", table:"", mapping:{}, density:"comfortable",
-             perRow:"auto", showDates:false, hidden:[] };
+             perRow:"auto", showDates:false, hidden:[],
+             mFrom:"", mTo:"", hideEmpty:false, weekNums:false };
   }
   function loadConfig(){
     var raw=null;
@@ -391,6 +392,28 @@
     return ensureColorColumn(cfg).then(function(){ return update(cfg,id,"color",value); });
   }
 
+  /* Move many tasks at once. A slipped timetable normally means "everything from
+     here on moves", and writing that one task at a time is slow and can leave the
+     sheet half-updated; this resolves every row first, then writes in one sync. */
+  function shiftDates(cfg, moves){
+    if(!moves || !moves.length) return Promise.resolve(0);
+    return Excel.run(function(ctx){
+      return grid(ctx,cfg).then(function(g){
+        var rc=resolveCols(g,cfg);
+        var built=buildItems(g,rc.col), rowOf={};
+        built.items.forEach(function(it){ rowOf[it.id]=it.row; });
+        var n=0;
+        moves.forEach(function(m){
+          var r=rowOf[m.id]; if(r===undefined) return;
+          writeCell(g,rc.col,r,"start",m.start||"");
+          if(rc.col.end!==undefined) writeCell(g,rc.col,r,"end",m.end||"");
+          n++;
+        });
+        return ctx.sync().then(function(){ return n; });
+      });
+    });
+  }
+
   // Move / resize writes both dates in one round trip so the bar never lands
   // half-updated. `end` of "" clears the End cell (task becomes single-day).
   function setDates(cfg,id,start,end){
@@ -512,7 +535,8 @@
     loadConfig:loadConfig, saveConfig:saveConfig, defaults:defaults,
     loadDesign:loadDesign, saveDesign:saveDesign,
     listSources:listSources, headersAt:headersAt, isCellRef:isCellRef,
-    read:read, update:update, setColor:setColor, setDates:setDates, add:add, addFull:addFull, remove:remove,
+    read:read, update:update, setColor:setColor, setDates:setDates, shiftDates:shiftDates,
+    add:add, addFull:addFull, remove:remove,
     sortByDate:sortByDate, selectRow:selectRow, watch:watch,
     toStatus:toStatus, toISO:toISO, isoToSerial:isoToSerial, serialToISO:serialToISO
   };

@@ -42,6 +42,8 @@
     cfg = Xl.loadConfig();
     $("density").value = cfg.density || "comfortable";
     $("showDates").checked = !!cfg.showDates;
+    $("hideEmpty").checked = !!cfg.hideEmpty;
+    $("weekNums").checked = !!cfg.weekNums;
     bind();
     if (!cfg.sheet || !cfg.mapping || !cfg.mapping.name) {
       $("setupBanner").style.display = "block";
@@ -54,7 +56,9 @@
 
   function startWatching(){
     if(!cfg.sheet) return;
-    Xl.watch(cfg, function(){ if(!pending) refresh(); }).catch(function(){});
+    // Never redraw mid-drag: Cal.render replaces the DOM and would pull the bar
+    // out from under the pointer.
+    Xl.watch(cfg, function(){ if(!pending && !Cal._dragging) refresh(); }).catch(function(){});
   }
 
   /* ---------- data ---------- */
@@ -120,10 +124,30 @@
     if(items.length) Cal.statusKey($("skey"), items);
     renderTable();
     renderFilters();
+    renderMonthPickers();
     Cal.render($("calendar"), items, {
       hidden: cfg.hidden||[], density: cfg.density,
-      perRow: "auto", showDates: cfg.showDates
+      perRow: "auto", showDates: cfg.showDates,
+      from: cfg.mFrom||"", to: cfg.mTo||"",
+      hideEmpty: !!cfg.hideEmpty, weekNums: !!cfg.weekNums,
+      scrollToday: !scrolledOnce
     });
+    scrolledOnce = true;
+  }
+  var scrolledOnce = false;
+
+  /* The month pickers scope a long project down to the part being worked on. */
+  function renderMonthPickers(){
+    var months = Cal.monthsOf(items);
+    var from=$("mFrom"), to=$("mTo");
+    if(!from||!to) return;
+    if(from.dataset.sig === months.length+":"+(months[0]||{}).k+":"+(months[months.length-1]||{}).k
+       && from.value===(cfg.mFrom||"") && to.value===(cfg.mTo||"")) return;
+    from.dataset.sig = months.length+":"+(months[0]||{}).k+":"+(months[months.length-1]||{}).k;
+    var opts = '<option value="">all</option>' + months.map(function(m){
+      return '<option value="'+m.k+'">'+m.label+'</option>'; }).join("");
+    from.innerHTML=opts; to.innerHTML=opts;
+    from.value=cfg.mFrom||""; to.value=cfg.mTo||"";
   }
 
   function renderTable(){
@@ -222,6 +246,53 @@
     onCreate: function(start, end){ applyAdd(start, end, "", true); },
     onDelete: function(id){ applyDelete(id, true); }
   });
+
+  /* ---------- bulk date shift -----------------------------------------
+     When a project slips, everything from a date onwards moves together.
+     Doing that a task at a time is the single most tedious job in the sheet,
+     so this computes the whole set, writes it in one go, and records one
+     undo entry that puts every task back. */
+  function shiftMoves(fromISO, days, overlap){
+    if(fromISO===undefined){
+      fromISO=$("shiftFrom").value; days=parseInt($("shiftDays").value,10);
+      overlap=$("shiftScope").value==="overlap";
+    }
+    var f=Cal.parseD(fromISO);
+    if(!f||!days) return [];
+    return items.filter(function(it){
+      var s=Cal.iStart(it); if(!s) return false;
+      return overlap ? (Cal.iEnd(it)>=f) : (s>=f);
+    }).map(function(it){
+      var ns=Cal.addDays(Cal.iStart(it),days);
+      var ne=it.end?Cal.addDays(Cal.iEnd(it),days):null;
+      return { id:it.id, start:Cal.fmtISO(ns), end:ne?Cal.fmtISO(ne):"" };
+    });
+  }
+  function updateShiftPreview(){
+    var m=shiftMoves(), d=parseInt($("shiftDays").value,10)||0;
+    $("shiftPrev").textContent = !d ? "Enter a number of days"
+      : m.length ? (m.length+" task"+(m.length===1?"":"s")+" move "+(d>0?"+":"")+d+" days")
+                 : "No tasks match";
+    $("shiftApply").disabled = !m.length;
+  }
+  function applyShift(fromISO, days, overlap){
+    var moves = fromISO===undefined ? shiftMoves() : shiftMoves(fromISO, days, overlap);
+    var d = fromISO===undefined ? (parseInt($("shiftDays").value,10)||0) : (days||0);
+    if(!moves.length){ toast("No tasks match that date", true); return; }
+    var back=moves.map(function(m){ var it=itemById(m.id);
+      return { id:m.id, start:it?it.start:"", end:(it&&it.end)?it.end:"" }; });
+    pushUndo(function(){ act(Xl.shiftDates(cfg, back)).catch(function(){}); });
+    $("shiftBox").style.display="none";
+    act(Xl.shiftDates(cfg, moves)).then(function(){
+      toast("Shifted "+moves.length+" task"+(moves.length===1?"":"s")+" by "+(d>0?"+":"")+d+" days");
+    }).catch(function(){});
+  }
+  function openShift(){
+    var box=$("shiftBox");
+    if(box.style.display!=="none"){ box.style.display="none"; return; }
+    if(!$("shiftFrom").value) $("shiftFrom").value=Cal.fmtISO(Cal.today0());
+    box.style.display="block"; updateShiftPreview();
+  }
 
   /* ---------- source & mapping ---------- */
   function openCfg(){
@@ -328,6 +399,7 @@
     if(m.op==="select"){ Xl.selectRow(cfg,m.id).catch(function(){}); return; }
     if(m.op==="update"){ applyUpdate(m.id,m.field,m.value,true); return; }
     if(m.op==="setdates"){ applySetDates(m.id,m.start,m.end,true); return; }
+    if(m.op==="shift"){ applyShift(m.from, m.days, m.overlap); return; }
     if(m.op==="savedesign"){ Xl.saveDesign(m.key, m.json)
         .then(function(){ replyToDialog({ op:"toast", msg:"Design saved to workbook" }); })
         .catch(function(e){ replyToDialog({ op:"toast", msg:"Save failed: "+(e.message||e) }); }); return; }
@@ -368,11 +440,30 @@
       act(Xl.sortByDate(cfg)).then(function(){ toast("Rows sorted by start date"); }).catch(function(){}); });
     $("reloadBtn").addEventListener("click",function(){ refresh(); });
     $("bigBtn").addEventListener("click",openBig);
-    ["density","showDates"].forEach(function(id){
-      $(id).addEventListener("change",function(){
+    ["density","showDates","hideEmpty","weekNums","mFrom","mTo"].forEach(function(id){
+      var el=$(id); if(!el) return;
+      el.addEventListener("change",function(){
         cfg.density=$("density").value; cfg.showDates=$("showDates").checked;
+        cfg.hideEmpty=$("hideEmpty").checked; cfg.weekNums=$("weekNums").checked;
+        cfg.mFrom=$("mFrom").value; cfg.mTo=$("mTo").value;
         Xl.saveConfig(cfg); render(); pushToDialog();
       });
+    });
+    $("todayBtn").addEventListener("click",function(){
+      if(!Cal.scrollToToday($("calendar"))) toast("This month is outside the selected range");
+    });
+    /* bulk shift */
+    $("shiftBtn").addEventListener("click",openShift);
+    $("shiftCancel").addEventListener("click",function(){ $("shiftBox").style.display="none"; });
+    $("shiftApply").addEventListener("click",function(){ applyShift(); });
+    ["shiftFrom","shiftDays","shiftScope"].forEach(function(id){
+      $(id).addEventListener("input",updateShiftPreview);
+      $(id).addEventListener("change",updateShiftPreview);
+    });
+    $("shiftBox").addEventListener("click",function(e){
+      var q=e.target.getAttribute&&e.target.getAttribute("data-q");
+      if(!q) return;
+      e.preventDefault(); $("shiftDays").value=q; updateShiftPreview();
     });
   }
 })();

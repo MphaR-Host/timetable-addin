@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Timetable Calendar</title>
-<link rel="stylesheet" href="styles.css?v=8">
+<link rel="stylesheet" href="styles.css?v=9">
 <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 </head>
 <body>
@@ -29,7 +29,34 @@
       <button class="btn primary" id="addBtn">+ Add task</button>
       <button class="btn" id="undoBtn" title="Undo the last calendar change" disabled>↩ Undo</button>
       <button class="btn" id="sortBtn" title="Reorder the rows in the sheet by date">Sort by date</button>
+      <button class="btn" id="shiftBtn" title="Move a whole run of tasks earlier or later">⇄ Shift dates</button>
       <button class="btn" id="reloadBtn">↻ Refresh</button>
+    </div>
+    <div class="shiftbox" id="shiftBox" style="display:none">
+      <div class="frow">
+        <label>Shift tasks</label>
+        <select id="shiftScope">
+          <option value="from">starting on or after</option>
+          <option value="overlap">running on or after</option>
+        </select>
+        <input type="date" id="shiftFrom">
+      </div>
+      <div class="frow">
+        <label>by</label>
+        <input type="number" id="shiftDays" value="7" step="1" style="width:74px">
+        <span class="mini">days</span>
+        <span class="grow"></span>
+        <button class="btn sm" data-q="-7">−1 wk</button>
+        <button class="btn sm" data-q="7">+1 wk</button>
+        <button class="btn sm" data-q="14">+2 wk</button>
+      </div>
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <span class="mini" id="shiftPrev">—</span>
+        <span>
+          <button class="btn sm" id="shiftCancel">Cancel</button>
+          <button class="btn sm primary" id="shiftApply">Apply</button>
+        </span>
+      </div>
     </div>
     <h2>Tasks &amp; milestones</h2>
     <div id="mbody"></div>
@@ -53,6 +80,10 @@
       </select>
     </label>
     <label class="mini"><input type="checkbox" id="showDates"> dates on bars</label>
+    <label class="mini">Months <select id="mFrom"></select> → <select id="mTo"></select></label>
+    <button class="btn sm" id="todayBtn" title="Scroll to the current month">Today</button>
+    <label class="mini"><input type="checkbox" id="hideEmpty"> hide empty</label>
+    <label class="mini"><input type="checkbox" id="weekNums"> week nos.</label>
   </div>
   <div id="calendar"></div>
 </div>
@@ -86,8 +117,8 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="calendar.js?v=8"></script>
-<script src="excel.js?v=8"></script>
-<script src="taskpane.js?v=8"></script>
+<script src="calendar.js?v=9"></script>
+<script src="excel.js?v=9"></script>
+<script src="taskpane.js?v=9"></script>
 </body>
 </html>

@@ -54,6 +54,13 @@ select,input[type=text],input[type=date]{border:1px solid var(--line);border-rad
 .chk{display:inline-flex;align-items:center;gap:5px;font-size:12px;border:1px solid var(--line);
      border-radius:20px;padding:3px 9px;cursor:pointer;background:#fff;}
 
+/* ---- bulk date shift ---- */
+.shiftbox{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:10px 11px;margin-bottom:10px;}
+.shiftbox .frow{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;}
+.shiftbox .frow>label{flex:0 0 auto;font-size:12px;color:var(--muted);font-weight:700;}
+.shiftbox .mini{color:var(--muted);}
+#shiftPrev{font-weight:600;}
+
 /* ---- status key ---- */
 .skey{display:flex;gap:16px;flex-wrap:wrap;align-items:center;background:var(--panel);
       border:1px solid var(--line);border-radius:9px;padding:9px 13px;margin-bottom:11px;font-size:12.5px;}
@@ -99,6 +106,30 @@ select,input[type=text],input[type=date]{border:1px solid var(--line);border-rad
 .msi .sg{font-weight:900;margin-right:3px;}
 .msi.key .lbl::after{content:" ★";opacity:.75;}
 .msi.st-Done .lbl{text-decoration:line-through;}
+/* the month containing today */
+.month.cur .mhead{box-shadow:inset 0 -3px 0 var(--today);}
+/* optional ISO week numbers, drawn in the gutter so the 7-column maths is untouched */
+.month.wknums .weeks{padding-left:30px;}
+.wknum{position:absolute;left:-25px;top:3px;width:22px;text-align:center;font-size:10.5px;
+  font-weight:700;color:#aab4bf;font-variant-numeric:tabular-nums;}
+/* "+N more" chip when a week has more lanes than fit */
+.lanemore{position:absolute;left:4px;height:18px;line-height:16px;padding:0 8px;font-size:11px;
+  font-weight:700;color:var(--accent);background:#eef2f6;border:1px solid var(--line);
+  border-radius:9px;cursor:pointer;font-family:inherit;z-index:2;}
+.lanemore:hover{background:#e2e9f0;}
+/* tasks that run through weekends */
+.bar.is-async::after,.msi.is-async::after{content:"⇄";position:absolute;right:4px;top:0;
+  font-size:10.5px;opacity:.7;line-height:inherit;pointer-events:none;}
+.msi.is-async{position:relative;}
+/* hover card (replaces the native title tooltip) */
+.hovercard{position:fixed;z-index:120;background:#22303f;color:#fff;border-radius:7px;
+  padding:8px 11px;max-width:320px;box-shadow:0 10px 26px rgba(0,0,0,.32);pointer-events:none;
+  font-family:"Segoe UI",-apple-system,Arial,sans-serif;}
+.hovercard .hc-t{font-size:13px;font-weight:700;line-height:1.25;}
+.hovercard .hc-m{font-size:11.5px;color:#c6d2de;margin-top:3px;}
+.hovercard .hc-s{color:#9fb0c1;}
+.hovercard .hc-n{font-size:12px;color:#e6edf4;margin-top:6px;padding-top:6px;
+  border-top:1px solid rgba(255,255,255,.18);line-height:1.35;white-space:pre-wrap;}
 .legend{border-top:1px solid var(--line);padding:8px 14px;font-size:var(--legfs);}
 .legend .li{display:flex;gap:7px;align-items:flex-start;margin-bottom:4px;cursor:pointer;}
 .legend .d{font-weight:700;flex:0 0 54px;color:var(--accent);}

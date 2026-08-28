@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Timetable — big view</title>
-<link rel="stylesheet" href="styles.css?v=8">
+<link rel="stylesheet" href="styles.css?v=9">
 <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 <script src="html2canvas.min.js"></script>
 <style>
@@ -59,6 +59,12 @@
       </select>
     </label>
     <label class="mini" style="color:#fff"><input type="checkbox" id="showDates"> dates on bars</label>
+    <label class="mini" style="color:#fff">Months
+      <select id="mFrom"></select> → <select id="mTo"></select></label>
+    <button class="hbtn" id="todayBtn" title="Scroll to the current month">Today</button>
+    <label class="mini" style="color:#fff"><input type="checkbox" id="hideEmpty"> hide empty</label>
+    <label class="mini" style="color:#fff"><input type="checkbox" id="weekNums"> week nos.</label>
+    <button class="hbtn" id="shiftBtn" title="Move a whole run of tasks earlier or later">⇄ Shift</button>
     <div class="pngwrap">
       <button class="hbtn" id="pngBtn">🖼 Save PNG ▾</button>
       <div class="pngmenu" id="pngMenu"></div>
@@ -74,6 +80,26 @@
     drag across days for a multi-day task.
   </div>
   <div class="skey" id="skey"></div>
+  <div class="shiftbox" id="shiftBox" style="display:none">
+    <div class="frow">
+      <label>Shift tasks</label>
+      <select id="shiftScope">
+        <option value="from">starting on or after</option>
+        <option value="overlap">running on or after</option>
+      </select>
+      <input type="date" id="shiftFrom">
+      <label>by</label>
+      <input type="number" id="shiftDays" value="7" step="1" style="width:74px">
+      <span class="mini">days</span>
+      <button class="btn sm" data-q="-7">−1 wk</button>
+      <button class="btn sm" data-q="7">+1 wk</button>
+      <button class="btn sm" data-q="14">+2 wk</button>
+      <span class="grow"></span>
+      <span class="mini" id="shiftPrev">—</span>
+      <button class="btn sm" id="shiftCancel">Cancel</button>
+      <button class="btn sm primary" id="shiftApply">Apply</button>
+    </div>
+  </div>
   <div id="calendar"></div>
   <div id="annoBar" class="anno-bar" style="display:none"></div>
   <div id="annoWrap" style="display:none"><div id="annoBoard" class="an-board"></div></div>
@@ -81,8 +107,8 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="calendar.js?v=8"></script>
-<script src="annotated.js?v=8"></script>
+<script src="calendar.js?v=9"></script>
+<script src="annotated.js?v=9"></script>
 <script>
 /* The dialog cannot reach the Excel object model, so it asks the task pane to
    act on its behalf and receives the data back the same way. */
@@ -99,17 +125,53 @@
     try { Office.context.ui.messageParent(JSON.stringify(obj)); } catch(e){}
   }
 
-  var view = "cal";
+  var view = "cal", scrolledOnce = false;
   function draw(){
     if (view === "anno") { if (Annotated.isMounted()) Annotated.update(items); return; }
+    if (Cal._dragging) return;          // a redraw mid-drag would detach the bar
     Cal.statusKey($("skey"), items);
+    renderMonthPickers();
     Cal.render($("calendar"), items, {
       hidden: hidden,
       density: $("density").value,
       perRow: $("perRow").value,
-      showDates: $("showDates").checked
+      showDates: $("showDates").checked,
+      from: $("mFrom").value, to: $("mTo").value,
+      hideEmpty: $("hideEmpty").checked,
+      weekNums: $("weekNums").checked,
+      scrollToday: !scrolledOnce
     });
+    scrolledOnce = true;
     buildPngMenu();
+  }
+
+  /* Month scoping: a long project renders a wall of empty grids otherwise. */
+  function renderMonthPickers(){
+    var months = Cal.monthsOf(items), from = $("mFrom"), to = $("mTo");
+    var sig = months.length+":"+(months[0]||{}).k+":"+(months[months.length-1]||{}).k;
+    if (from.dataset.sig === sig) return;
+    from.dataset.sig = sig;
+    var fv=from.value, tv=to.value;
+    var opts = '<option value="">all</option>' + months.map(function(m){
+      return '<option value="'+m.k+'">'+m.label+'</option>'; }).join("");
+    from.innerHTML=opts; to.innerHTML=opts;
+    from.value=fv; to.value=tv;
+  }
+
+  /* Bulk shift — the pane owns the data and the undo stack, so it does the work. */
+  function shiftMatches(){
+    var f=Cal.parseD($("shiftFrom").value), days=parseInt($("shiftDays").value,10);
+    var overlap=$("shiftScope").value==="overlap";
+    if(!f||!days) return [];
+    return items.filter(function(it){ var s=Cal.iStart(it); if(!s) return false;
+      return overlap ? (Cal.iEnd(it)>=f) : (s>=f); });
+  }
+  function updateShiftPreview(){
+    var m=shiftMatches(), d=parseInt($("shiftDays").value,10)||0;
+    $("shiftPrev").textContent = !d ? "Enter a number of days"
+      : m.length ? (m.length+" task"+(m.length===1?"":"s")+" move "+(d>0?"+":"")+d+" days")
+                 : "No tasks match";
+    $("shiftApply").disabled = !m.length;
   }
 
   /* Switch between the calendar view and the annotated (slide) view. */
@@ -132,6 +194,7 @@
     view = v;
     var anno = v === "anno";
     ["hint","skey","calendar"].forEach(function(id){ var e=$(id); if(e) e.style.display = anno ? "none" : ""; });
+    if (anno) $("shiftBox").style.display = "none";
     $("calControls").style.display = anno ? "none" : "contents";
     $("annoPng").style.display = anno ? "" : "none";
     $("annoBar").style.display = anno ? "flex" : "none";
@@ -308,11 +371,37 @@
       },
       function () { send({ op: "ready" }); });
 
-    ["density","perRow","showDates"].forEach(function(id){
+    ["density","perRow","showDates","mFrom","mTo","hideEmpty","weekNums"].forEach(function(id){
       $(id).addEventListener("change", function(){
         draw();
         send({ op:"prefs", density:$("density").value, showDates:$("showDates").checked });
       });
+    });
+    $("todayBtn").addEventListener("click", function(){
+      if(!Cal.scrollToToday($("calendar"))) toast("This month is outside the selected range");
+    });
+    $("shiftBtn").addEventListener("click", function(){
+      var box=$("shiftBox");
+      if(box.style.display!=="none"){ box.style.display="none"; return; }
+      if(!$("shiftFrom").value) $("shiftFrom").value=Cal.fmtISO(Cal.today0());
+      box.style.display="block"; updateShiftPreview();
+    });
+    $("shiftCancel").addEventListener("click", function(){ $("shiftBox").style.display="none"; });
+    $("shiftApply").addEventListener("click", function(){
+      var n=shiftMatches().length; if(!n) return;
+      send({ op:"shift", from:$("shiftFrom").value,
+             days:parseInt($("shiftDays").value,10), overlap:$("shiftScope").value==="overlap" });
+      $("shiftBox").style.display="none";
+      toast("Shifting "+n+" task"+(n===1?"":"s")+"…");
+    });
+    ["shiftFrom","shiftDays","shiftScope"].forEach(function(id){
+      $(id).addEventListener("input", updateShiftPreview);
+      $(id).addEventListener("change", updateShiftPreview);
+    });
+    $("shiftBox").addEventListener("click", function(e){
+      var q=e.target.getAttribute && e.target.getAttribute("data-q");
+      if(!q) return; e.preventDefault();
+      $("shiftDays").value=q; updateShiftPreview();
     });
     $("printBtn").addEventListener("click", function(){ window.print(); });
     $("undoBtn").addEventListener("click", function(){ send({ op:"undo" }); toast("Undo…"); });
