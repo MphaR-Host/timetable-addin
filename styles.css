@@ -265,18 +265,30 @@ body.dragging .bar,body.dragging .msi{cursor:grabbing!important;}
 .dragtip{position:fixed;z-index:95;background:#22303f;color:#fff;font-size:12px;font-weight:600;
   padding:4px 8px;border-radius:5px;pointer-events:none;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,.28);}
 /* right-click popup editor for a box */
-.cal-pop{position:fixed;z-index:130;background:#fff;border:1px solid var(--line);border-radius:9px;
-  padding:11px;box-shadow:0 10px 30px rgba(0,0,0,.28);}
-.cal-pop-t{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:6px;}
-.cal-pop-i{width:100%;border:2px solid var(--sel);border-radius:6px;padding:6px 8px;font-family:inherit;
-  font-size:13px;color:var(--ink);outline:none;box-sizing:border-box;}
-.cal-pop-r{display:flex;align-items:center;gap:6px;margin-top:9px;}
-.cal-pop-b{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:6px;padding:5px 11px;
-  font-size:12.5px;cursor:pointer;font-family:inherit;}
+.cal-pop{position:fixed;z-index:130;background:#fff;border:1px solid var(--line);border-radius:10px;
+  padding:13px 14px 12px;box-shadow:0 14px 38px rgba(0,0,0,.26);}
+.cal-pop-t{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--muted);margin-bottom:7px;}
+.cal-pop-i{width:100%;border:1px solid var(--line);border-radius:7px;padding:8px 10px;font-family:inherit;
+  font-size:13px;color:var(--ink);outline:none;box-sizing:border-box;transition:border-color .12s,box-shadow .12s;}
+.cal-pop-i:focus{border-color:var(--sel);box-shadow:0 0 0 3px rgba(52,152,219,.18);}
+.cal-pop-c{display:flex;align-items:center;gap:9px;margin-top:10px;}
+.cal-pop-c span{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);}
+.cal-pop-col{width:42px;height:26px;padding:0;border:1px solid var(--line);border-radius:6px;
+  background:none;cursor:pointer;}
+.cal-pop-r{display:flex;align-items:center;gap:4px;margin-top:12px;}
+.cal-pop-sp{flex:1 1 auto;}
+/* Two real choices on the right; Delete / Excel stay quiet on the left so the
+   row does not read as four equally weighted buttons. */
+.cal-pop-b{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:7px;padding:6px 12px;
+  font-size:12.5px;cursor:pointer;font-family:inherit;white-space:nowrap;line-height:1.2;}
 .cal-pop-b:hover{background:#f0f3f7;}
-.cal-pop-b.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
-.cal-pop-b.danger{color:#c0392b;border-color:#f0c9c4;}
-.cal-pop-b.danger:hover{background:#fdecea;}
+.cal-pop-b.primary{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600;}
+.cal-pop-b.primary:hover{background:#22303f;}
+.cal-pop-b.ghost{border-color:transparent;background:none;color:var(--muted);padding:6px 8px;}
+.cal-pop-b.ghost:hover{background:#f0f3f7;color:var(--ink);}
+.cal-pop-b.ghost.danger{color:#c0392b;}
+.cal-pop-b.ghost.danger:hover{background:#fdecea;}
 .cal-pop-b.danger[data-armed]{background:#c0392b;color:#fff;border-color:#c0392b;font-weight:700;}
 .toast{position:fixed;left:50%;transform:translateX(-50%) translateY(10px);bottom:14px;background:#2c3e50;
        color:#fff;padding:9px 14px;border-radius:7px;font-size:12.5px;max-width:90%;opacity:0;

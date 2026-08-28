@@ -241,6 +241,7 @@
     canResize: function(){ return available.indexOf("end") >= 0; },
     onEdit:   function(id, start, end){ applySetDates(id, start, end, true); },
     onRename: function(id, name){ applyUpdate(id, "name", name, true); },
+    onColor:  function(id, color){ applyUpdate(id, "color", color, true); },
     onSelect: function(id){ Xl.selectRow(cfg, id).catch(function(){}); },
     onAdd:    function(date, name){ applyAdd(date, "", name, true); },
     onCreate: function(start, end){ applyAdd(start, end, "", true); },

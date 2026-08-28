@@ -296,6 +296,7 @@
             el.dataset.start=fmtISO(iStart(it));
             el.dataset.async=it.async?"1":"";
             el.dataset.name=it.name||"";
+            el.dataset.color=colOf(it);
             paint(el,colOf(it),it.status,"3px");
             var gcol=it.status==="Ongoing"?"#ffffff":(it.status==="Done"?DONE_INK:ink(colOf(it)));
             el.innerHTML='<span class="sg" style="color:'+gcol+'">'+(SG[it.status]||"○")+
@@ -334,6 +335,7 @@
           fmtISO(iStart(p.it))+" to "+fmtISO(iEnd(p.it)));
         bar.dataset.status=p.it.status;
         bar.dataset.notes=p.it.notes||"";
+        bar.dataset.color=colOf(p.it);
         bar.dataset.jump=p.it.id;
         // Whole-task dates + whether THIS segment is a continuation, so drag
         // can offer edge-resize only on the segment showing the real edge.
@@ -526,16 +528,23 @@
     // A small floating editor anchored to the clicked box. `cfg` = {title,value,save,extra}.
     function openPopup(anchor, cfg){
       closePopup();
-      var r = anchor.getBoundingClientRect(), W = 250;
+      var r = anchor.getBoundingClientRect(), W = 296;
       var pop = document.createElement("div");
       pop.className = "cal-pop";
+      var wantsColor = cfg.color && cfg.saveColor;
       pop.innerHTML =
         '<div class="cal-pop-t">' + esc(cfg.title) + '</div>' +
-        '<input type="text" class="cal-pop-i">' +
+        '<input type="text" class="cal-pop-i" placeholder="Task or milestone name">' +
+        (wantsColor
+          ? '<label class="cal-pop-c"><span>Colour</span>' +
+            '<input type="color" class="cal-pop-col" value="' + esc(cfg.color) + '"></label>'
+          : '') +
+        // Destructive and "go elsewhere" actions stay quiet on the left; the two
+        // real choices sit on the right, so the row reads as one decision.
         '<div class="cal-pop-r">' +
-          (cfg.del ? '<button class="cal-pop-b danger" data-a="delete">Delete</button>' : '') +
-          (cfg.extra ? '<button class="cal-pop-b" data-a="extra">' + esc(cfg.extra.label) + '</button>' : '') +
-          '<span style="flex:1"></span>' +
+          (cfg.del ? '<button class="cal-pop-b ghost danger" data-a="delete">Delete</button>' : '') +
+          (cfg.extra ? '<button class="cal-pop-b ghost" data-a="extra">' + esc(cfg.extra.label) + '</button>' : '') +
+          '<span class="cal-pop-sp"></span>' +
           '<button class="cal-pop-b" data-a="cancel">Cancel</button>' +
           '<button class="cal-pop-b primary" data-a="save">Save</button>' +
         '</div>';
@@ -546,8 +555,18 @@
       if (top + pop.offsetHeight > vh) top = Math.max(8, r.top - pop.offsetHeight - 6);
       pop.style.left = left + "px"; pop.style.top = top + "px"; pop.style.width = W + "px";
       var inp = pop.querySelector(".cal-pop-i");
-      inp.value = cfg.value || ""; inp.focus(); inp.select();
-      function commit(save){ closePopup(); if (save) cfg.save(inp.value); }
+      inp.value = cfg.value || ""; inp.focus();
+      // select all, but keep the *start* of a long name in view rather than its tail
+      try { inp.setSelectionRange(0, inp.value.length, "backward"); } catch(e){ inp.select(); }
+      inp.scrollLeft = 0;
+      function commit(save){
+        var col = pop.querySelector(".cal-pop-col");
+        var name = inp.value, newCol = col ? col.value.toLowerCase() : null;
+        closePopup();                                   // read values before the node goes
+        if (!save) return;
+        cfg.save(name);
+        if (newCol && cfg.saveColor && newCol !== String(cfg.color||"").toLowerCase()) cfg.saveColor(newCol);
+      }
       inp.addEventListener("keydown", function(e){
         if (e.key === "Enter"){ e.preventDefault(); commit(true); }
         else if (e.key === "Escape"){ e.preventDefault(); commit(false); }
@@ -610,8 +629,10 @@
       if (bar && bar.dataset.jump && opts.onRename){
         e.preventDefault();
         var bid = bar.dataset.jump;
-        openPopup(bar, { title:"Edit text", value:bar.dataset.name||"",
+        openPopup(bar, { title:"Edit task", value:bar.dataset.name||"",
+          color: bar.dataset.color||"",
           save:function(v){ if(v !== (bar.dataset.name||"")) opts.onRename(bid, v); },
+          saveColor: opts.onColor ? function(c){ opts.onColor(bid, c); } : null,
           del: opts.onDelete ? function(){ opts.onDelete(bid); } : null,
           extra: opts.onSelect ? { label:"⤢ Excel", run:function(){ opts.onSelect(bid); } } : null });
         return;

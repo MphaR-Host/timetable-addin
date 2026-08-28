@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Timetable — big view</title>
-<link rel="stylesheet" href="styles.css?v=9">
+<link rel="stylesheet" href="styles.css?v=10">
 <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 <script src="html2canvas.min.js"></script>
 <style>
@@ -107,8 +107,8 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="calendar.js?v=9"></script>
-<script src="annotated.js?v=9"></script>
+<script src="calendar.js?v=10"></script>
+<script src="annotated.js?v=10"></script>
 <script>
 /* The dialog cannot reach the Excel object model, so it asks the task pane to
    act on its behalf and receives the data back the same way. */
@@ -443,6 +443,9 @@
     onRename: function(id, name){
       send({ op:"update", id:id, field:"name", value:name });
       toast("Updating Excel…");
+    },
+    onColor: function(id, color){
+      send({ op:"update", id:id, field:"color", value:color });
     },
     onSelect: function(id){ send({ op:"select", id:id }); },
     onAdd: function(date, name){
