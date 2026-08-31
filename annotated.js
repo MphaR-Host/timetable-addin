@@ -413,6 +413,23 @@
 
   /* ---- shared group move (labels + month blocks together) ---- */
   function monthEl(k){ return S.board.querySelector('.an-month[data-mk="'+k+'"]'); }
+  /* Which month block sits under a board point, and which one holds a task's
+     anchor cell - needed because a dragged arrow tip is stored as an absolute
+     board coordinate and has to travel with the month it points into. */
+  function monthKeyAtPoint(px,py){
+    var b=S.board.getBoundingClientRect(), hit=null;
+    S.board.querySelectorAll(".an-month").forEach(function(w){
+      var r=w.getBoundingClientRect(), x=r.left-b.left, y=r.top-b.top;
+      if(px>=x-8 && px<=x+r.width+8 && py>=y-8 && py<=y+r.height+8) hit=w.dataset.mk;
+    });
+    return hit;
+  }
+  function anchorMonthKey(id){
+    var lab=S.ctx && S.ctx.labels[id];
+    if(!lab || !lab._anchor || !lab._anchor.closest) return null;
+    var m=lab._anchor.closest(".an-month");
+    return m ? m.dataset.mk : null;
+  }
   function buildGroup(kind, id){
     var multi=(selCount()+monthSelCount())>1;
     var inSel = kind==="label" ? !!S.selSet[id] : !!S.monthSel[id];
@@ -422,7 +439,28 @@
     var sL={}, sM={};
     labels.forEach(function(g){ var l=S.ctx.labels[g]; var p=S.placed[g]||{x:parseFloat(l.style.left)||0,y:parseFloat(l.style.top)||0}; sL[g]={x:p.x,y:p.y}; });
     months.forEach(function(k){ var p=S.monthPos[k]||{x:0,y:0}; sM[k]={x:p.x,y:p.y}; });
-    return { labels:labels, months:months, sL:sL, sM:sM, single:(labels.length===1&&!months.length) };
+    /* Snapshot the arrows that have to travel with this drag. A stored tip moves
+       when the month it points into moves; a stored bend only moves when BOTH
+       ends do, so a label-only drag reshapes the curve instead of dragging the
+       bend off with it. */
+    var movedL={}, movedM={};
+    labels.forEach(function(g){ movedL[g]=1; });
+    months.forEach(function(k){ movedM[k]=1; });
+    var arrows=[];
+    if(S.ctx) S.ctx.tasks.forEach(function(t){
+      arrowsOf(t.id).forEach(function(a, ai){
+        if(!a.end && !a.wp) return;
+        var tipMoves = a.end ? !!movedM[monthKeyAtPoint(a.end.x,a.end.y)]
+                             : !!movedM[anchorMonthKey(t.id)];
+        var wpMoves  = !!movedL[t.id] && tipMoves;
+        if(!tipMoves && !wpMoves) return;
+        arrows.push({ id:t.id, ai:ai,
+          end:(a.end && tipMoves) ? {x:a.end.x,y:a.end.y} : null,
+          wp :(a.wp  && wpMoves ) ? {x:a.wp.x, y:a.wp.y } : null });
+      });
+    });
+    return { labels:labels, months:months, sL:sL, sM:sM, arrows:arrows,
+             single:(labels.length===1&&!months.length) };
   }
   function applyGroupMove(group, ddx, ddy){
     group.labels.forEach(function(g){ var nx=Math.max(4,group.sL[g].x+ddx), ny=Math.max(4,group.sL[g].y+ddy);
@@ -431,6 +469,13 @@
       S.placed[g]={x:nx,y:ny}; S.userPlaced[g]=1; });
     group.months.forEach(function(k){ var nx=Math.max(0,group.sM[k].x+ddx), ny=Math.max(0,group.sM[k].y+ddy);
       var w=monthEl(k); if(w){ w.style.left=nx+"px"; w.style.top=ny+"px"; } S.monthPos[k]={x:nx,y:ny}; S.monthMoved[k]=1; });
+    // Carry the pinned arrow tips/bends along, or they stay behind while the
+    // months they point into slide away.
+    (group.arrows||[]).forEach(function(g){
+      var a=arrowRef(g.id,g.ai); if(!a) return;
+      if(g.end) a.end={x:g.end.x+ddx, y:g.end.y+ddy};
+      if(g.wp)  a.wp ={x:g.wp.x +ddx, y:g.wp.y +ddy};
+    });
     drawArrows();
   }
 
