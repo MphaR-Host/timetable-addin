@@ -101,7 +101,7 @@
     S.items = (items||[]).filter(function(t){ return tStart(t); });
     var ids={}; S.items.forEach(function(t){ ids[t.id]=1; });
     // prune layout state for tasks that no longer exist
-    [S.placed,S.widths,S.arrow,S.userPlaced].forEach(function(m){ Object.keys(m).forEach(function(k){ if(!ids[k]) delete m[k]; }); });
+    [S.placed,S.widths,S.arrow,S.extraArrows,S.userPlaced].forEach(function(m){ Object.keys(m).forEach(function(k){ if(!ids[k]) delete m[k]; }); });
     // new-task detection: first time we ever see this timetable, seed silently
     if(S.known===null){ S.known={}; S.items.forEach(function(t){ S.known[t.id]=1; }); S._newIds={}; }
     else { S._newIds={}; S.items.forEach(function(t){ if(!S.known[t.id]){ S._newIds[t.id]=1; } S.known[t.id]=1; }); }
@@ -348,21 +348,74 @@
     persist();
   }
 
+  /* Arrow anchoring -------------------------------------------------------
+     A tip or bend used to be stored as an absolute board coordinate, so any
+     re-layout (toggling a month, resizing the canvas, moving a month block)
+     left it behind pointing at nothing. They are now stored relatively:
+       tip  -> offset inside the month block it points into, or, when dropped
+               in open space, an offset from its own label
+       bend -> an offset from the midpoint of start->tip
+     so both follow whatever they belong to. Legacy absolute values are
+     migrated the first time they are read, preserving how they look. */
+  function boardRect(){ return S.board.getBoundingClientRect(); }
+  function monthRectOf(mk){
+    var w=mk && monthEl(mk); if(!w) return null;
+    var b=boardRect(), r=w.getBoundingClientRect();
+    return {x:r.left-b.left, y:r.top-b.top, w:r.width, h:r.height};
+  }
+  function resolveEnd(a, lr){
+    var e=a.end; if(!e) return null;
+    if(e.mk){ var m=monthRectOf(e.mk); if(m) return {x:m.x+e.rx, y:m.y+e.ry}; }
+    if(e.lrx!==undefined) return {x:lr.x+e.lrx, y:lr.y+e.lry};
+    if(e.x!==undefined){                                  // legacy absolute
+      var mk=monthKeyAtPoint(e.x,e.y), mm=mk&&monthRectOf(mk);
+      if(mm) a.end={mk:mk, rx:e.x-mm.x, ry:e.y-mm.y};
+      else   a.end={lrx:e.x-lr.x, lry:e.y-lr.y};
+      return {x:e.x, y:e.y};
+    }
+    return null;
+  }
+  function storeEnd(a, px, py, lr){
+    var mk=monthKeyAtPoint(px,py), m=mk&&monthRectOf(mk);
+    if(m) a.end={mk:mk, rx:px-m.x, ry:py-m.y};
+    else  a.end={lrx:px-lr.x, lry:py-lr.y};
+  }
+  function midOf(start,tip){ return {x:(start.x+tip.x)/2, y:(start.y+tip.y)/2}; }
+  function resolveWp(a, start, tip){
+    var mid=midOf(start,tip), w=a.wp;
+    if(!w) return mid;
+    if(w.ox!==undefined) return {x:mid.x+w.ox, y:mid.y+w.oy};
+    if(w.x!==undefined){ a.wp={ox:w.x-mid.x, oy:w.y-mid.y}; return {x:w.x, y:w.y}; }
+    return mid;
+  }
+  function storeWp(a, px, py, start, tip){
+    var mid=midOf(start,tip); a.wp={ox:px-mid.x, oy:py-mid.y};
+  }
+  /* One arrow's geometry, shared by drawing and by the drag handles. */
+  function geomOf(id, ai){
+    var c=S.ctx; if(!c || !c.labels[id]) return null;
+    var b=boardRect(), lr=rectOf(c.labels[id],b), cc=centreOf(c.labels[id]._anchor,b);
+    var a=arrowRef(id,ai);
+    var start={x:lr.x+(a.startOff?a.startOff.x:lr.w/2), y:lr.y+(a.startOff?a.startOff.y:lr.h/2)};
+    var tip=resolveEnd(a,lr);
+    if(!tip){
+      if(ai===0){                                   // main arrow meets the anchor cell's edge
+        var probe=resolveWp(a,start,cc);
+        var hw=cc.w/2,hh=cc.h/2,vx=probe.x-cc.x,vy=probe.y-cc.y; if(vx===0&&vy===0){vy=-1;}
+        var k=Math.min(hw/(Math.abs(vx)||1e6),hh/(Math.abs(vy)||1e6)), ul=Math.hypot(vx,vy)||1;
+        tip={x:cc.x+vx*k+(vx/ul), y:cc.y+vy*k+(vy/ul)};
+      } else tip={x:start.x+40, y:start.y-40};
+    }
+    return {a:a, lr:lr, cc:cc, start:start, tip:tip, wp:resolveWp(a,start,tip)};
+  }
+
   function drawArrows(){
-    var c=S.ctx; if(!c) return; var b=S.board.getBoundingClientRect(); var out=""; var one=selOne();
+    var c=S.ctx; if(!c) return; var out=""; var one=selOne();
     c.tasks.forEach(function(t){
-      var lr=rectOf(c.labels[t.id],b), color=c.color[t.id], cc=centreOf(c.labels[t.id]._anchor,b);
+      var color=c.color[t.id];
       arrowsOf(t.id).forEach(function(s, ai){
-        var start={x:lr.x+(s.startOff?s.startOff.x:lr.w/2), y:lr.y+(s.startOff?s.startOff.y:lr.h/2)};
-        var tip;
-        if(s.end){ tip={x:s.end.x,y:s.end.y}; }
-        else if(ai===0){                                   // main arrow: meet the anchor cell's edge
-          var wpd=s.wp||{x:(start.x+cc.x)/2,y:(start.y+cc.y)/2};
-          var hw=cc.w/2,hh=cc.h/2,vx=wpd.x-cc.x,vy=wpd.y-cc.y; if(vx===0&&vy===0){vy=-1;}
-          var k=Math.min(hw/(Math.abs(vx)||1e6),hh/(Math.abs(vy)||1e6)), ul=Math.hypot(vx,vy)||1;
-          tip={x:cc.x+vx*k+(vx/ul), y:cc.y+vy*k+(vy/ul)};
-        } else { tip={x:start.x+40,y:start.y-40}; }
-        var wp=s.wp||{x:(start.x+tip.x)/2,y:(start.y+tip.y)/2};
+        var g=geomOf(t.id, ai); if(!g) return;
+        var start=g.start, tip=g.tip, wp=g.wp;
         var sw=S.selSet[t.id]?3.5:2.5;
         var ang=Math.atan2(tip.y-wp.y,tip.x-wp.x), ah=8;
         var p1x=tip.x-ah*Math.cos(ang-0.42),p1y=tip.y-ah*Math.sin(ang-0.42);
@@ -439,27 +492,7 @@
     var sL={}, sM={};
     labels.forEach(function(g){ var l=S.ctx.labels[g]; var p=S.placed[g]||{x:parseFloat(l.style.left)||0,y:parseFloat(l.style.top)||0}; sL[g]={x:p.x,y:p.y}; });
     months.forEach(function(k){ var p=S.monthPos[k]||{x:0,y:0}; sM[k]={x:p.x,y:p.y}; });
-    /* Snapshot the arrows that have to travel with this drag. A stored tip moves
-       when the month it points into moves; a stored bend only moves when BOTH
-       ends do, so a label-only drag reshapes the curve instead of dragging the
-       bend off with it. */
-    var movedL={}, movedM={};
-    labels.forEach(function(g){ movedL[g]=1; });
-    months.forEach(function(k){ movedM[k]=1; });
-    var arrows=[];
-    if(S.ctx) S.ctx.tasks.forEach(function(t){
-      arrowsOf(t.id).forEach(function(a, ai){
-        if(!a.end && !a.wp) return;
-        var tipMoves = a.end ? !!movedM[monthKeyAtPoint(a.end.x,a.end.y)]
-                             : !!movedM[anchorMonthKey(t.id)];
-        var wpMoves  = !!movedL[t.id] && tipMoves;
-        if(!tipMoves && !wpMoves) return;
-        arrows.push({ id:t.id, ai:ai,
-          end:(a.end && tipMoves) ? {x:a.end.x,y:a.end.y} : null,
-          wp :(a.wp  && wpMoves ) ? {x:a.wp.x, y:a.wp.y } : null });
-      });
-    });
-    return { labels:labels, months:months, sL:sL, sM:sM, arrows:arrows,
+    return { labels:labels, months:months, sL:sL, sM:sM,
              single:(labels.length===1&&!months.length) };
   }
   function applyGroupMove(group, ddx, ddy){
@@ -469,13 +502,6 @@
       S.placed[g]={x:nx,y:ny}; S.userPlaced[g]=1; });
     group.months.forEach(function(k){ var nx=Math.max(0,group.sM[k].x+ddx), ny=Math.max(0,group.sM[k].y+ddy);
       var w=monthEl(k); if(w){ w.style.left=nx+"px"; w.style.top=ny+"px"; } S.monthPos[k]={x:nx,y:ny}; S.monthMoved[k]=1; });
-    // Carry the pinned arrow tips/bends along, or they stay behind while the
-    // months they point into slide away.
-    (group.arrows||[]).forEach(function(g){
-      var a=arrowRef(g.id,g.ai); if(!a) return;
-      if(g.end) a.end={x:g.end.x+ddx, y:g.end.y+ddy};
-      if(g.wp)  a.wp ={x:g.wp.x +ddx, y:g.wp.y +ddy};
-    });
     drawArrows();
   }
 
@@ -494,12 +520,13 @@
     if(ai>0 && type==="end") h.title="Double-click to remove this arrow";
     h.addEventListener("mousedown",function(e){
       e.preventDefault(); e.stopPropagation(); var b=S.board.getBoundingClientRect(), pushed=false;
-      function move(ev){ if(!pushed){pushUndo();pushed=true;} var px=ev.clientX-b.left, py=ev.clientY-b.top; var a=arrowRef(id,ai);
-        if(type==="wp") a.wp={x:px,y:py};
+      function move(ev){ if(!pushed){pushUndo();pushed=true;} var px=ev.clientX-b.left, py=ev.clientY-b.top;
+        var a=arrowRef(id,ai), g=geomOf(id,ai); if(!g) return;
+        if(type==="wp") storeWp(a, px, py, g.start, g.tip);
         else if(type==="end"){
           if(S.snap){ var best=null,bd=14; S.board.querySelectorAll(".an-cell[data-date]").forEach(function(cel){ var r=cel.getBoundingClientRect(); var cx=r.left+r.width/2-b.left, cy=r.top+r.height/2-b.top; var d=Math.hypot(cx-px,cy-py); if(d<bd){bd=d;best={x:cx,y:cy};} }); if(best){px=best.x;py=best.y;} }
-          a.end={x:px,y:py};
-        } else { var lr=rectOf(S.ctx.labels[id],b); a.startOff={x:px-lr.x,y:py-lr.y}; }
+          storeEnd(a, px, py, g.lr);
+        } else { a.startOff={x:px-g.lr.x, y:py-g.lr.y}; }
         drawArrows(); }
       function up(){ persist(); document.removeEventListener("mousemove",move); document.removeEventListener("mouseup",up); }
       document.addEventListener("mousemove",move); document.addEventListener("mouseup",up);
